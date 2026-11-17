@@ -57,6 +57,7 @@ const stave = ref<Stave>('tab')
 const activeTrack = ref(0)
 const mixerOpen = ref(false)
 const cursorBox = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+const cursorEl = ref<HTMLElement | null>(null)
 
 const totalLabel = computed(() => formatTime(synth.duration.value))
 const positionLabel = computed(() => formatTime(synth.position.value))
@@ -295,15 +296,30 @@ function updateCursor() {
       const right = Math.max(...heads.map((b: any) => b.x + b.w))
       const top = Math.min(...heads.map((b: any) => b.y))
       const bottom = Math.max(...heads.map((b: any) => b.y + b.h))
-      cursorBox.value = { x: left, y: top, w: Math.max(right - left, 6), h: Math.max(bottom - top, 12) }
+      cursorBox.value = { x: left, y: top, w: Math.max(right - left, 10), h: Math.max(bottom - top, 18) }
+      followCursor()
       return
     }
 
     const box = bounds.visualBounds
-    cursorBox.value = box ? { x: box.x, y: box.y, w: box.w, h: box.h } : null
+    if (box) {
+      cursorBox.value = { x: box.x, y: box.y, w: Math.max(box.w, 10), h: Math.max(box.h, 18) }
+      followCursor()
+    } else {
+      cursorBox.value = null
+    }
   } catch {
     cursorBox.value = null
   }
+}
+
+/**
+ * Keep the playback cursor on screen: scrollIntoView handles both the inner
+ * score scroller and the page scroll, unlike hand-rolled scrollLeft math.
+ */
+function followCursor() {
+  if (!synth.playing.value) return
+  nextTick(() => cursorEl.value?.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
 }
 
 const cursorStyle = computed(() =>
@@ -473,7 +489,7 @@ onBeforeUnmount(() => {
 
       <div v-show="loaded" ref="scrollEl" class="score-wrap">
         <div ref="viewport" class="score">
-          <div v-if="cursorBox" class="cursor" :style="cursorStyle" />
+          <div v-if="cursorBox" ref="cursorEl" class="cursor" :style="cursorStyle" />
         </div>
       </div>
 
