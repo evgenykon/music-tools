@@ -52,3 +52,8 @@ Commands run inside the Docker container:
 make run cmd="yarn add <package>"
 make down && make dev   # restart after adding dependencies
 ```
+
+- **Tab player:** open Guitar Pro files (.gp3/.gp4/.gp5/.gpx/.gp) or MusicXML and read the score as
+  tablature, notation or both; full transport (play/pause, stop, seek, tempo, metronome, loop) and a
+  mixer with per-track volume, 10-band EQ and General MIDI instrument choice
+  ([`/player`](https://evgenykon.github.io/music-tools/player))
