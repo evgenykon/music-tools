@@ -128,6 +128,7 @@ async function ensureApi() {
     scoreArtist.value = score.artist || ''
     activeTrack.value = 0
     synth.loadScore(score)
+    applyStave()
   })
 
   instance.renderFinished.on(() => updateCursor())
@@ -224,11 +225,37 @@ function seekAt(event: MouseEvent) {
   synth.seek(ratio * synth.duration.value)
 }
 
+/**
+ * View mode is applied per staff: forcing StaveProfile.Tab hides percussion
+ * staves entirely, and StaveProfile.Default renders tabs + notation for
+ * stringed instruments. Flags keep percussion visible while showing only
+ * what the user asked for.
+ */
 function applyStave() {
   if (!api.value || !atRef.value) return
-  api.value.settings.display.staveProfile = staveToProfile(atRef.value, stave.value)
-  api.value.updateSettings()
-  api.value.render()
+  const instance = api.value
+
+  instance.settings.display.staveProfile = atRef.value.StaveProfile.Default
+  for (const track of instance.score?.tracks || []) {
+    const percussionTrack = !!track.isPercussion
+    for (const staff of track.staves || []) {
+      // Percussion staves have no tablature: forcing the flags turns them
+      // into a meaningless 6-line tab full of zeros.
+      if (percussionTrack || staff.isPercussion || !staff.isStringed) continue
+      if (stave.value === 'tab') {
+        staff.showTablature = true
+        staff.showStandardNotation = false
+      } else if (stave.value === 'score') {
+        staff.showTablature = false
+        staff.showStandardNotation = true
+      } else {
+        staff.showTablature = true
+        staff.showStandardNotation = true
+      }
+    }
+  }
+  instance.updateSettings()
+  instance.render()
 }
 
 function selectTrack() {
