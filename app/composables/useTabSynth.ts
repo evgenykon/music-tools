@@ -22,6 +22,7 @@ export interface TrackState {
   muted: boolean
   eq: number[]
   program: number
+  isPercussion: boolean
 }
 
 interface NoteEvent {
@@ -30,6 +31,7 @@ interface NoteEvent {
   start: number
   dur: number
   velocity: number
+  drum: boolean
 }
 
 interface Channel {
@@ -83,6 +85,14 @@ export function createTabSynth() {
   let startedAtCtx = 0
   let startedFrom = 0
   let raf = 0
+  let scheduler = 0
+  let clock = 0
+  let clockWorker: Worker | null = null
+  let nextEvent = 0
+  let nextClick = 0
+  // rAF is throttled in background tabs, so the clock and the look-ahead
+  // scheduler both run on timers.
+  const LOOKAHEAD_MS = 3000
 
   function ensureContext() {
     if (ctx) return ctx
@@ -130,28 +140,65 @@ export function createTabSynth() {
     })
   }
 
-  /** Convert score ticks into a millisecond tempo map. */
-  function buildSegments(score: any) {
-    segments = []
-    let tick = 0
-    let ms = 0
-    let lastTempo = 120
+  /** Tempo per master bar (imported tempo lives in tempoAutomations). */
+  function resolveTempos(score: any) {
+    const tempos = new Map<any, number>()
+    let last = 120
     for (const bar of score.masterBars) {
-      // alphaTab keeps an imported tempo in tempoAutomations; bars without an
-      // automation inherit the tempo of the previous bar.
       const automated = bar.tempoAutomations?.[0]?.value
-      const tempo = automated && automated > 0 ? automated : bar.tempo && bar.tempo > 0 ? bar.tempo : lastTempo
-      lastTempo = tempo
-      const length = bar.calculateDuration()
-      const barMs = (length / QUARTER_TICKS) * (60000 / tempo)
-      segments.push({ startTick: tick, endTick: tick + length, startMs: ms, endMs: ms + barMs, tempo })
-      tick += length
-      ms += barMs
+      const tempo = automated && automated > 0 ? automated : bar.tempo && bar.tempo > 0 ? bar.tempo : last
+      last = tempo
+      tempos.set(bar, tempo)
     }
+    return tempos
+  }
+
+  /**
+   * Build the tick → millisecond map from the beats themselves.
+   * `beat.absolutePlaybackStart` is already expanded by alphaTab (repeats are
+   * unfolded), so walking bars would lose repeated sections.
+   */
+  function buildSegments(score: any) {
+    const tempos = resolveTempos(score)
+    const tempoByTick = new Map<number, number>()
+    const barStarts = new Set<number>()
+    let maxTick = 0
+
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        for (const bar of staff.bars) {
+          const tempo = tempos.get(bar.masterBar) ?? 120
+          let barStart = -1
+          for (const voice of bar.voices) {
+            for (const beat of voice.beats) {
+              const tick = beat.absolutePlaybackStart
+              if (!tempoByTick.has(tick)) tempoByTick.set(tick, tempo)
+              if (barStart < 0 || tick < barStart) barStart = tick
+              maxTick = Math.max(maxTick, tick + (beat.playbackDuration || 0))
+            }
+          }
+          if (barStart >= 0) barStarts.add(barStart)
+        }
+      }
+    }
+
+    const ticks = [...tempoByTick.keys()].sort((a, b) => a - b)
+    segments = []
+    let ms = 0
+    for (let i = 0; i < ticks.length; i += 1) {
+      const startTick = ticks[i]!
+      const endTick = i + 1 < ticks.length ? ticks[i + 1]! : Math.max(maxTick, startTick + 1)
+      const tempo = tempoByTick.get(startTick) || 120
+      const spanMs = ((endTick - startTick) / QUARTER_TICKS) * (60000 / tempo)
+      segments.push({ startTick, endTick, startMs: ms, endMs: ms + spanMs, tempo })
+      ms += spanMs
+    }
+
     duration.value = ms
     loopStart.value = 0
     loopEnd.value = ms
-    barTicks = new Set(segments.map((s) => s.startTick))
+    // Metronome accents: ticks where a bar begins (repeat instances included).
+    barTicks = barStarts
   }
 
   function msForTick(tick: number) {
@@ -173,6 +220,7 @@ export function createTabSynth() {
     const seenBeat = new Set<string>()
     score.tracks.forEach((track: any, trackIndex: number) => {
       for (const staff of track.staves) {
+        const isDrumStaff = !!staff.isPercussion
         for (const bar of staff.bars) {
           for (const voice of bar.voices) {
             for (const beat of voice.beats) {
@@ -194,6 +242,7 @@ export function createTabSynth() {
                   start: beatMs,
                   dur: Math.max(40, beatDur * (note.durationPercent || 1)),
                   velocity: note.velocity || 95,
+                  drum: isDrumStaff,
                 })
               }
             }
@@ -203,6 +252,13 @@ export function createTabSynth() {
     })
     events.sort((a, b) => a.start - b.start)
     beatTicks.sort((a, b) => a.tick - b.tick)
+
+    // Repeats and tempo automations can leave the bar map shorter than the
+    // real timeline: never cut playback before the last sounding note.
+    const lastNote = events.reduce((max, event) => Math.max(max, event.start + event.dur), 0)
+    const lastBeat = beatTicks.length ? beatTicks[beatTicks.length - 1]!.ms : 0
+    duration.value = Math.max(duration.value, lastNote, lastBeat)
+    loopEnd.value = duration.value
   }
 
   function loadScore(score: any) {
@@ -215,6 +271,7 @@ export function createTabSynth() {
       muted: false,
       eq: EQ_FREQS.map(() => 0),
       program: track.playbackInfo?.program ?? 25,
+      isPercussion: !!track.isPercussion || !!track.staves?.some((staff: any) => staff.isPercussion),
     }))
     buildChannels(score.tracks.length)
     tracks.value.forEach(applyTrackSettings)
@@ -244,9 +301,87 @@ export function createTabSynth() {
     }
   }
 
+
+  /** GM drum key → synthesized percussion hit (no samples needed). */
+  function scheduleDrum(event: NoteEvent, when: number, channel: Channel) {
+    if (!ctx) return
+    const key = event.note
+    const isKick = key === 35 || key === 36
+    const isSnare = key === 38 || key === 40 || key === 37
+    const isHat = key === 42 || key === 44 || key === 46
+    const isCymbal = key === 49 || key === 51 || key === 52 || key === 53 || key === 55 || key === 57 || key === 59
+    const isTom = key >= 41 && key <= 50 && !isHat && !isCymbal
+    const peak = Math.min(0.9, (event.velocity / 127) * 0.55)
+
+    const noise = () => {
+      const buffer = ctx!.createBuffer(1, Math.floor(ctx!.sampleRate * 0.35), ctx!.sampleRate)
+      const data = buffer.getChannelData(0)
+      for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1
+      const source = ctx!.createBufferSource()
+      source.buffer = buffer
+      return source
+    }
+
+    if (isKick) {
+      const oscillator = ctx.createOscillator()
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(120, when)
+      oscillator.frequency.exponentialRampToValueAtTime(45, when + 0.12)
+      const gain = ctx.createGain()
+      gain.gain.setValueAtTime(peak, when)
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.28)
+      oscillator.connect(gain)
+      gain.connect(channel.gain)
+      oscillator.start(when)
+      oscillator.stop(when + 0.3)
+      active.push({ src: oscillator, gain })
+      return
+    }
+
+    if (isHat || isCymbal || isSnare || isTom) {
+      const source = noise()
+      const filter = ctx.createBiquadFilter()
+      filter.type = isHat || isCymbal ? 'highpass' : 'bandpass'
+      filter.frequency.value = isHat ? 8000 : isCymbal ? 5200 : isSnare ? 1800 : 320
+      filter.Q.value = isTom ? 1.6 : 0.9
+      const gain = ctx.createGain()
+      const decay = isCymbal ? 0.9 : isHat ? 0.09 : isSnare ? 0.18 : 0.32
+      gain.gain.setValueAtTime(peak * (isHat ? 0.5 : isCymbal ? 0.45 : 0.9), when)
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + decay)
+      source.connect(filter)
+      filter.connect(gain)
+      gain.connect(channel.gain)
+      source.start(when)
+      source.stop(when + decay + 0.05)
+      active.push({ src: source, gain })
+      if (isSnare) {
+        // body of the snare
+        const body = ctx.createOscillator()
+        body.type = 'triangle'
+        body.frequency.setValueAtTime(190, when)
+        const bodyGain = ctx.createGain()
+        bodyGain.gain.setValueAtTime(peak * 0.35, when)
+        bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.12)
+        body.connect(bodyGain)
+        bodyGain.connect(channel.gain)
+        body.start(when)
+        body.stop(when + 0.14)
+        active.push({ src: body, gain: bodyGain })
+      }
+      return
+    }
+
+    // any other percussion key: short click
+    scheduleClick(when, key === 39)
+  }
+
   function scheduleNote(event: NoteEvent, when: number, trackState: TrackState) {
     const channel = channels[event.track]
     if (!channel || !ctx) return
+    if (event.drum) {
+      scheduleDrum(event, when, channel)
+      return
+    }
     const timbre = timbreFor(trackState.program)
     const freq = 440 * Math.pow(2, (event.note - 69) / 12)
     const peak = Math.min(0.9, (event.velocity / 127) * 0.5)
@@ -303,36 +438,49 @@ export function createTabSynth() {
     active.push({ src: oscillator, gain })
   }
 
-  function scheduleAll(from: number) {
-    if (!ctx) return
-    stopVoices()
-    const now = ctx.currentTime + 0.05
-    startedFrom = from
-    startedAtCtx = now
-
+  /** Schedule only a short window ahead: big scores have thousands of notes. */
+  function pump() {
+    if (!ctx || !playing.value) return
     const rate = speed.value
-    for (const event of events) {
-      if (event.start + event.dur <= from) continue
-      if (event.start < from) {
-        // note already sounding: start it immediately, shortened
-        scheduleNote(
-          { ...event, start: from, dur: event.dur - (from - event.start) },
-          now,
-          tracks.value[event.track]!,
-        )
-        continue
-      }
-      const when = now + ((event.start - from) / 1000) / rate
-      scheduleNote(event, when, tracks.value[event.track]!)
+    const horizonMs = startedFrom + (ctx.currentTime - startedAtCtx) * 1000 * rate + LOOKAHEAD_MS
+
+    while (nextEvent < events.length && events[nextEvent]!.start <= horizonMs) {
+      const event = events[nextEvent]!
+      nextEvent += 1
+      if (event.start + event.dur <= startedFrom) continue
+      const offset = Math.max(0, event.start - startedFrom) / 1000 / rate
+      const when = startedAtCtx + offset
+      const trimmed = event.start < startedFrom
+        ? { ...event, dur: event.dur - (startedFrom - event.start) }
+        : event
+      scheduleNote(trimmed, Math.max(when, ctx.currentTime), tracks.value[event.track]!)
     }
 
     if (metronome.value) {
-      for (const beat of beatTicks) {
-        if (beat.ms < from) continue
-        const when = now + ((beat.ms - from) / 1000) / rate
-        scheduleClick(when, barTicks.has(beat.tick))
+      while (nextClick < beatTicks.length && beatTicks[nextClick]!.ms <= horizonMs) {
+        const beat = beatTicks[nextClick]!
+        nextClick += 1
+        if (beat.ms < startedFrom) continue
+        const when = startedAtCtx + (beat.ms - startedFrom) / 1000 / rate
+        scheduleClick(Math.max(when, ctx.currentTime), barTicks.has(beat.tick))
       }
     }
+  }
+
+  function startScheduling(from: number) {
+    if (!ctx) return
+    stopVoices()
+    startedFrom = from
+    startedAtCtx = ctx.currentTime + 0.12
+
+    nextEvent = events.findIndex((event) => event.start + event.dur > from)
+    if (nextEvent < 0) nextEvent = events.length
+    nextClick = beatTicks.findIndex((beat) => beat.ms >= from)
+    if (nextClick < 0) nextClick = beatTicks.length
+
+    pump()
+    clearInterval(scheduler)
+    scheduler = window.setInterval(pump, 250)
   }
 
   function stopVoices() {
@@ -348,33 +496,76 @@ export function createTabSynth() {
     active = []
   }
 
-  function tick() {
+
+  /**
+   * Background tabs throttle `setInterval` to ~1/minute, which kills the
+   * look-ahead scheduler. A dedicated worker keeps ticking.
+   */
+  function startTicking() {
+    clearInterval(clock)
+    clock = window.setInterval(() => {
+      updateClock()
+    }, 60)
+
+    if (clockWorker) return
+    try {
+      const source = 'let t=null;self.onmessage=function(e){if(e.data==="start"){clearInterval(t);t=setInterval(function(){self.postMessage(1)},250)}else{clearInterval(t)}}'
+      const url = URL.createObjectURL(new Blob([source], { type: 'application/javascript' }))
+      clockWorker = new Worker(url)
+      clockWorker.onmessage = () => {
+        if (!playing.value) return
+        updateClock()
+        pump()
+      }
+      clockWorker.postMessage('start')
+    } catch {
+      clockWorker = null
+    }
+  }
+
+  function stopTicking() {
+    clearInterval(clock)
+    if (clockWorker) {
+      try {
+        clockWorker.postMessage('stop')
+      } catch {
+        /* ignore */
+      }
+      clockWorker.terminate()
+      clockWorker = null
+    }
+  }
+
+  function updateClock() {
     if (!ctx || !playing.value) return
     const elapsed = (ctx.currentTime - startedAtCtx) * 1000 * speed.value
-    position.value = Math.min(duration.value, startedFrom + elapsed)
+    position.value = Math.min(duration.value, Math.max(0, startedFrom + elapsed))
+
     if (loop.value && loopEnd.value > loopStart.value && position.value >= loopEnd.value) {
       seek(loopStart.value)
-    } else if (position.value >= duration.value) {
+      return
+    }
+    if (position.value >= duration.value) {
       stop()
       return
     }
-    raf = requestAnimationFrame(tick)
+    pump()
   }
 
   async function play() {
     const context = ensureContext()
     if (context.state === 'suspended') await context.resume()
     if (position.value >= duration.value - 1) position.value = 0
-    scheduleAll(position.value)
+    startScheduling(position.value)
     playing.value = true
-    cancelAnimationFrame(raf)
-    raf = requestAnimationFrame(tick)
+    startTicking()
   }
 
   function pause() {
     if (!playing.value) return
     playing.value = false
-    cancelAnimationFrame(raf)
+    stopTicking()
+    clearInterval(scheduler)
     stopVoices()
   }
 
@@ -403,6 +594,7 @@ export function createTabSynth() {
 
   function destroy() {
     pause()
+    stopTicking()
     channels.forEach((channel) => channel.gain.disconnect())
     channels = []
     master?.disconnect()
@@ -437,6 +629,10 @@ export function createTabSynth() {
     applyTrackSettings,
     destroy,
     trackAt,
+    /** Diagnostics: audio context state/time. */
+    get context() {
+      return ctx
+    },
     /** Diagnostics: live WebAudio channels per track. */
     get channels() {
       return channels

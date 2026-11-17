@@ -89,7 +89,9 @@ function staveToProfile(at: any, value: Stave) {
     case 'tabscore':
       return at.StaveProfile.ScoreTab
     default:
-      return at.StaveProfile.Tab
+      // Default = auto: tablature for strings, rhythm/slash for percussion.
+      // A forced Tab profile renders nothing for drum staves.
+      return at.StaveProfile.Default
   }
 }
 
@@ -463,7 +465,7 @@ onBeforeUnmount(() => {
                   <span class="control-value">{{ Math.round(track.volume * 100) }}%</span>
                 </label>
 
-                <label class="control">
+                <label v-if="!track.isPercussion" class="control">
                   <span class="control-label">Инструмент</span>
                   <select v-model.number="track.program" class="select select--wide" @change="applyTrack(index)">
                     <option v-for="(gm, program) in GM_NAMES" :key="program" :value="program">
@@ -472,6 +474,7 @@ onBeforeUnmount(() => {
                   </select>
                   <span class="timbre">тембр: {{ timbreLabel(track.program) }}</span>
                 </label>
+                <span v-else class="timbre">ударные · GM drum map (банк синтезируется движком)</span>
 
                 <button type="button" class="button button--ghost" @click="resetEq(index)">Сбросить EQ</button>
               </div>
