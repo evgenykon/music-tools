@@ -17,7 +17,12 @@ const isActive = (to: string) => route.path === to || route.path === `${to}/`
   <div class="app-shell">
     <header class="app-bar">
       <NuxtLink to="/" class="app-brand">
-        <span class="app-brand-dot" aria-hidden="true" />
+        <svg class="app-brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+          <circle cx="32" cy="32" r="19.5" fill="none" stroke="currentColor" stroke-width="6" />
+          <circle cx="32" cy="12.5" r="6.4" fill="currentColor" />
+          <circle cx="48.9" cy="42.25" r="6.4" fill="currentColor" />
+          <circle cx="15.1" cy="42.25" r="6.4" fill="currentColor" />
+        </svg>
         <span class="app-brand-name">music-tools</span>
       </NuxtLink>
 
@@ -70,11 +75,11 @@ const isActive = (to: string) => route.path === to || route.path === `${to}/`
   letter-spacing: -0.01em;
 }
 
-.app-brand-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
+.app-brand-mark {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
 .app-tabs {

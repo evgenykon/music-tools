@@ -264,7 +264,7 @@ const cursorStyle = computed(() =>
     ? {
         left: `${cursorBox.value.x}px`,
         top: `${cursorBox.value.y}px`,
-        width: `${cursorBox.value.w}px`,
+        width: `${Math.max(cursorBox.value.w, 12)}px`,
         height: `${cursorBox.value.h}px`,
       }
     : {},
@@ -768,11 +768,25 @@ onBeforeUnmount(() => {
 
 .cursor {
   position: absolute;
+  z-index: 10;
   pointer-events: none;
-  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  border: 2px solid var(--accent);
   border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 55%, transparent);
   transition: left 0.08s linear, top 0.08s linear, width 0.08s linear;
+}
+
+.cursor::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -6px;
+  width: 6px;
+  height: 6px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--accent);
+  border-radius: 1px;
 }
 
 .backdrop {
