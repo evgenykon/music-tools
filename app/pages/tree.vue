@@ -19,7 +19,7 @@ import {
 import { STANDARD_TUNING } from '~/composables/useChordDetector'
 import { useAudioEngine } from '~/composables/useAudioEngine'
 
-useHead({ title: 'Дерево аккордов — quinto-circle' })
+useHead({ title: 'Дерево аккордов — music-tools' })
 
 const tonicPc = ref(0)
 const quality = ref<'maj' | 'min'>('maj')

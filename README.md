@@ -1,10 +1,10 @@
-# quinto-circle
+# music-tools
 
 An interactive circle of fifths — a tool for exploring harmony, building chord progressions, and playing them back.
 
-**[Live demo](https://evgenykon.github.io/quinto-circle/)**
+**[Live demo](https://evgenykon.github.io/music-tools/)**
 
-![quinto-circle](public/img.png)
+![music-tools](public/img.png)
 
 ## Features
 
@@ -16,17 +16,17 @@ An interactive circle of fifths — a tool for exploring harmony, building chord
 - **Visualization:** chord movement graph inside the circle, current chord highlighting
 - **Chord detector:** vertical guitar fretboard (5 frets with scroll along the neck), clickable strings,
   open strings and tuning presets — the chord name is recognized automatically
-  ([`/chords`](https://evgenykon.github.io/quinto-circle/chords))
+  ([`/chords`](https://evgenykon.github.io/music-tools/chords))
 - **Chord tree:** pick a central chord and see every allowed progression branching out from it in all
   directions; branches end on a chord that can return to the centre. Filter by mode, style
   (functional, pop, rock, blues, jazz), triads/sevenths, mood (light, sad, tense) and depth 2–8.
   Chords keep one colour (major warm, minor cold); clicking a chord shows its fingering on the neck
-  ([`/tree`](https://evgenykon.github.io/quinto-circle/tree))
+  ([`/tree`](https://evgenykon.github.io/music-tools/tree))
 
 - **Rehearsal notebook:** A4 page per screen with an 8×4 interactive table — part labels (Intro, Chorus…)
   in a narrow vertical strip, up to 4 chords per cell, a note field, a chord diagram picker and a
   tab editor (up to 8 notes). Multiple pages, autosave to localStorage, JSON export/import and printing
-  ([`/notebook`](https://evgenykon.github.io/quinto-circle/notebook))
+  ([`/notebook`](https://evgenykon.github.io/music-tools/notebook))
 
 ## Getting started
 

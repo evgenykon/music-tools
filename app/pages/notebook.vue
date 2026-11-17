@@ -13,7 +13,7 @@ import {
   type TabNote,
 } from '~/composables/useNotebook'
 
-useHead({ title: 'Блокнот для репетиций — quinto-circle' })
+useHead({ title: 'Блокнот для репетиций — music-tools' })
 
 const notebook = ref<NotebookFile>(createNotebook())
 const menuOpen = ref(false)

@@ -2,7 +2,7 @@
   <div class="page">
     <header class="header">
       <div>
-        <h1 class="title">quinto-circle</h1>
+        <h1 class="title">music-tools</h1>
         <p class="subtitle">Квинтовый круг — интерактивный инструмент для создания музыки</p>
       </div>
       <nav class="nav">

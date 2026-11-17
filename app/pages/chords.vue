@@ -7,7 +7,7 @@ import {
 } from '~/composables/useChordDetector'
 import { useAudioEngine } from '~/composables/useAudioEngine'
 
-useHead({ title: 'Определить аккорд — quinto-circle' })
+useHead({ title: 'Определить аккорд — music-tools' })
 
 const strings = ref<(number | null)[]>([null, null, null, null, null, null])
 const tuningId = ref(TUNINGS[0]!.id)
