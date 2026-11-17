@@ -279,7 +279,27 @@ function updateCursor() {
       return
     }
     const bounds = instance.boundsLookup?.findBeat(result.beat)
-    const box = bounds?.visualBounds
+    if (!bounds) {
+      cursorBox.value = null
+      return
+    }
+
+    // Align to the actual note heads: beat bounds include the space before the
+    // glyph, which made the cursor look shifted to the left of the notes.
+    const heads = (bounds.notes || [])
+      .map((noteBounds: any) => noteBounds.noteHeadBounds)
+      .filter(Boolean)
+
+    if (heads.length) {
+      const left = Math.min(...heads.map((b: any) => b.x))
+      const right = Math.max(...heads.map((b: any) => b.x + b.w))
+      const top = Math.min(...heads.map((b: any) => b.y))
+      const bottom = Math.max(...heads.map((b: any) => b.y + b.h))
+      cursorBox.value = { x: left, y: top, w: Math.max(right - left, 6), h: Math.max(bottom - top, 12) }
+      return
+    }
+
+    const box = bounds.visualBounds
     cursorBox.value = box ? { x: box.x, y: box.y, w: box.w, h: box.h } : null
   } catch {
     cursorBox.value = null
@@ -782,6 +802,7 @@ onBeforeUnmount(() => {
 .score-wrap {
   max-height: calc(100vh - var(--app-bar-h) - 190px);
   overflow: auto;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--background);
@@ -790,7 +811,7 @@ onBeforeUnmount(() => {
 .score {
   position: relative;
   min-height: 300px;
-  padding: 8px;
+  padding: 0;
 }
 
 .cursor {
