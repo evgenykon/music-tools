@@ -53,7 +53,16 @@ make run cmd="yarn add <package>"
 make down && make dev   # restart after adding dependencies
 ```
 
-- **Tab player:** open Guitar Pro files (.gp3/.gp4/.gp5/.gpx/.gp) or MusicXML and read the score as
+- **GTP player:** open Guitar Pro files (.gp3/.gp4/.gp5/.gpx/.gp) or MusicXML and read the score as
   tablature, notation or both; full transport (play/pause, stop, seek, tempo, metronome, loop) and a
   mixer with per-track volume, 10-band EQ and General MIDI instrument choice
   ([`/player`](https://evgenykon.github.io/music-tools/player))
+
+## Sound samples
+
+Guitars and bass use sampled instruments from the FluidR3 GM soundfont
+(via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts), MIT);
+drums are sampled from the [Tone.js](https://tonejs.github.io/) acoustic kit.
+Banks are loaded on demand (~2 MB per instrument) and played through the same
+per-track channel as the synthesized instruments, so volume and EQ keep working.
+Everything else falls back to the built-in oscillator synthesizer.

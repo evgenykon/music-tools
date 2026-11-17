@@ -62,7 +62,46 @@ export function timbreFor(program: number): Timbre {
   return 'piano'
 }
 
-export function createTabSynth() {
+const NOTE_OFFSETS: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }
+
+/** "A#3" / "Db4" → MIDI number. */
+function noteNameToMidi(name: string): number | null {
+  const match = /^([A-Ga-g])([#b]?)(-?\d)$/.exec(name.trim())
+  if (!match) return null
+  const base = NOTE_OFFSETS[match[1]!.toUpperCase()]
+  if (base == null) return null
+  const accidental = match[2] === '#' ? 1 : match[2] === 'b' ? -1 : 0
+  return base + accidental + (Number(match[3]) + 1) * 12
+}
+
+/** GM program → bundled sample set (FluidR3 GM via midi-js-soundfonts). */
+export function samplesFor(program: number): string | null {
+  switch (program) {
+    case 24:
+      return 'acoustic_guitar_nylon'
+    case 25:
+    case 31:
+      return 'acoustic_guitar_steel'
+    case 26:
+    case 27:
+    case 28:
+      return 'electric_guitar_clean'
+    case 29:
+      return 'overdriven_guitar'
+    case 30:
+      return 'distortion_guitar'
+    case 32:
+    case 33:
+    case 34:
+      return 'electric_bass_finger'
+    default:
+      return null
+  }
+}
+
+export function createTabSynth(options: { base?: string } = {}) {
+  const assetsBase = options.base || '/'
+
   let ctx: AudioContext | null = null
   let master: GainNode | null = null
   let channels: Channel[] = []
@@ -275,6 +314,14 @@ export function createTabSynth() {
     }))
     buildChannels(score.tracks.length)
     tracks.value.forEach(applyTrackSettings)
+    tracks.value.forEach((track) => {
+      if (track.isPercussion) {
+        ensureDrumSamples()
+        return
+      }
+      const name = samplesFor(track.program)
+      if (name) ensureSamples(name)
+    })
     position.value = 0
     playing.value = false
   }
@@ -375,13 +422,165 @@ export function createTabSynth() {
     scheduleClick(when, key === 39)
   }
 
+
+  // ---- sampled instruments (FluidR3 GM guitars/bass + drum kit) ------------
+  const sampleSets = new Map<string, Map<number, AudioBuffer>>()
+  const sampleLoading = new Set<string>()
+  const drumBuffers = new Map<string, AudioBuffer>()
+  let drumsLoading = false
+
+  async function decodeDataUri(uri: string): Promise<AudioBuffer | null> {
+    try {
+      const base64 = uri.slice(uri.indexOf(',') + 1)
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+      return await ctx!.decodeAudioData(bytes.buffer)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * midi-js-soundfonts ship as `MIDI.Soundfont.<name> = { "A#3": "data:audio/mp3;base64,..." }`
+   * — plain JSON, so no eval of third-party code is needed.
+   */
+  function ensureSamples(name: string) {
+    if (sampleSets.has(name) || sampleLoading.has(name)) return
+    ensureContext()
+    sampleLoading.add(name)
+    ;(async () => {
+      try {
+        const response = await fetch(`${assetsBase}soundfonts/${name}.js`)
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const text = await response.text()
+        const start = text.indexOf('{')
+        const end = text.lastIndexOf('}')
+        const json = JSON.parse(text.slice(start, end + 1)) as Record<string, string>
+        const map = new Map<number, AudioBuffer>()
+        for (const [noteName, uri] of Object.entries(json)) {
+          const midi = noteNameToMidi(noteName)
+          if (midi == null) continue
+          const buffer = await decodeDataUri(uri)
+          if (buffer) map.set(midi, buffer)
+        }
+        sampleSets.set(name, map)
+      } catch {
+        sampleSets.set(name, new Map())
+      } finally {
+        sampleLoading.delete(name)
+      }
+    })()
+  }
+
+  function ensureDrumSamples() {
+    if (drumsLoading || drumBuffers.size) return
+    ensureContext()
+    drumsLoading = true
+    ;(async () => {
+      for (const name of ['kick', 'snare', 'hihat', 'tom1', 'tom2', 'tom3']) {
+        try {
+          const response = await fetch(`${assetsBase}drums/${name}.mp3`)
+          if (!response.ok) continue
+          const buffer = await ctx!.decodeAudioData(await response.arrayBuffer())
+          drumBuffers.set(name, buffer)
+        } catch {
+          /* keep the synthesized fallback */
+        }
+      }
+      drumsLoading = false
+    })()
+  }
+
+  function nearestSample(map: Map<number, AudioBuffer>, note: number) {
+    let best: { note: number; buffer: AudioBuffer } | null = null
+    let bestDistance = Infinity
+    for (const [sampleNote, buffer] of map) {
+      const distance = Math.abs(sampleNote - note)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        best = { note: sampleNote, buffer }
+      }
+    }
+    return best
+  }
+
+  function playBuffer(
+    buffer: AudioBuffer,
+    when: number,
+    durationMs: number,
+    rate: number,
+    peak: number,
+    channel: Channel,
+  ) {
+    if (!ctx) return
+    const source = ctx.createBufferSource()
+    source.buffer = buffer
+    source.playbackRate.value = rate
+    const gain = ctx.createGain()
+    const release = 0.12
+    const end = when + Math.max(0.05, durationMs / 1000)
+    gain.gain.setValueAtTime(peak, when)
+    gain.gain.setValueAtTime(peak, end)
+    gain.gain.exponentialRampToValueAtTime(0.0001, end + release)
+    source.connect(gain)
+    gain.connect(channel.gain)
+    source.start(when)
+    source.stop(end + release + 0.05)
+    active.push({ src: source, gain })
+  }
+
+  function scheduleSampledNote(event: NoteEvent, when: number, channel: Channel, name: string) {
+    const map = sampleSets.get(name)
+    if (!map || !map.size) return false
+    const sample = nearestSample(map, event.note)
+    if (!sample) return false
+    const rate = Math.pow(2, (event.note - sample.note) / 12)
+    const peak = Math.min(0.95, (event.velocity / 127) * 0.85)
+    playBuffer(sample.buffer, when, event.dur, rate, peak, channel)
+    return true
+  }
+
+  /** GM drum key → bundled sample + playback rate. */
+  function drumSampleFor(key: number): { name: string; rate: number } | null {
+    if (key === 35 || key === 36) return { name: 'kick', rate: 1 }
+    if (key === 38 || key === 40) return { name: 'snare', rate: 1 }
+    if (key === 37) return { name: 'snare', rate: 0.94 }
+    if (key === 39) return { name: 'snare', rate: 1.1 }
+    if (key === 42 || key === 44) return { name: 'hihat', rate: 1.15 }
+    if (key === 46) return { name: 'hihat', rate: 0.85 }
+    if (key === 49 || key === 57) return { name: 'hihat', rate: 0.7 }
+    if (key === 51 || key === 55 || key === 59) return { name: 'hihat', rate: 0.8 }
+    if (key >= 41 && key <= 50) return { name: key <= 43 ? 'tom1' : key <= 47 ? 'tom2' : 'tom3', rate: 1 }
+    return null
+  }
+
+  function scheduleSampledDrum(event: NoteEvent, when: number, channel: Channel) {
+    const pick = drumSampleFor(event.note)
+    if (!pick) return false
+    const buffer = drumBuffers.get(pick.name)
+    if (!buffer) return false
+    const peak = Math.min(0.95, (event.velocity / 127) * 0.8)
+    playBuffer(buffer, when, Math.min(event.dur, buffer.duration * 1000 / pick.rate), pick.rate, peak, channel)
+    return true
+  }
+
   function scheduleNote(event: NoteEvent, when: number, trackState: TrackState) {
     const channel = channels[event.track]
     if (!channel || !ctx) return
     if (event.drum) {
+      ensureDrumSamples()
+      if (scheduleSampledDrum(event, when, channel)) return
       scheduleDrum(event, when, channel)
       return
     }
+
+    const sampleName = samplesFor(trackState.program)
+    if (sampleName) {
+      ensureSamples(sampleName)
+      if (scheduleSampledNote(event, when, channel, sampleName)) return
+    }
+
     const timbre = timbreFor(trackState.program)
     const freq = 440 * Math.pow(2, (event.note - 69) / 12)
     const peak = Math.min(0.9, (event.velocity / 127) * 0.5)
@@ -629,6 +828,13 @@ export function createTabSynth() {
     applyTrackSettings,
     destroy,
     trackAt,
+    /** Diagnostics: how many samples are decoded for each set. */
+    get diagnostics() {
+      return {
+        sampleSets: [...sampleSets.entries()].map(([name, map]) => ({ name, notes: map.size })),
+        drums: [...drumBuffers.keys()],
+      }
+    },
     /** Diagnostics: audio context state/time. */
     get context() {
       return ctx

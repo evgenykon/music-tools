@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { EQ_FREQS, createTabSynth, timbreFor } from '~/composables/useTabSynth'
+import { EQ_FREQS, createTabSynth, samplesFor, timbreFor } from '~/composables/useTabSynth'
 
-useHead({ title: 'Табы — music-tools' })
+useHead({ title: 'GTP player — music-tools' })
 
 const base = useRuntimeConfig().app.baseURL
 
@@ -42,7 +42,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 
 const api = shallowRef<any>(null)
 const atRef = shallowRef<any>(null)
-const synth = createTabSynth()
+const synth = createTabSynth({ base })
 
 const loaded = ref(false)
 const loading = ref(false)
@@ -363,7 +363,7 @@ onBeforeUnmount(() => {
   <div class="page">
     <header class="header">
       <div class="header-titles">
-        <h1 class="title">Табы</h1>
+        <h1 class="title">GTP player</h1>
         <p class="subtitle">
           Откройте файл Guitar Pro — табулатура отрисуется и зазвучит. Только просмотр и прослушивание, без редактирования.
         </p>
@@ -519,7 +519,9 @@ onBeforeUnmount(() => {
                       {{ program }} · {{ gm }}
                     </option>
                   </select>
-                  <span class="timbre">тембр: {{ timbreLabel(track.program) }}</span>
+                  <span class="timbre">
+                    {{ samplesFor(track.program) ? 'сэмплы: ' + samplesFor(track.program) : 'тембр: ' + timbreLabel(track.program) }}
+                  </span>
                 </label>
                 <span v-else class="timbre">ударные · GM drum map (банк синтезируется движком)</span>
 
