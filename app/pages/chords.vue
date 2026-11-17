@@ -64,10 +64,6 @@ const playSingle = (midi: number) => {
         <h1 class="title">Определить аккорд</h1>
         <p class="subtitle">Зажмите ноты на грифе — название аккорда построится автоматически</p>
       </div>
-      <nav class="nav">
-        <NuxtLink to="/" class="nav-link">← Квинтовый круг</NuxtLink>
-        <NuxtLink to="/tree" class="nav-link">Дерево аккордов</NuxtLink>
-      </nav>
     </header>
 
     <section class="result">
@@ -159,28 +155,6 @@ const playSingle = (midi: number) => {
   margin: 3px 0 0;
   font-size: 13px;
   color: var(--muted-foreground);
-}
-
-.nav {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.nav-link {
-  font-size: 13px;
-  color: var(--muted-foreground);
-  text-decoration: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px 12px;
-  white-space: nowrap;
-  transition: all 0.15s;
-}
-
-.nav-link:hover {
-  color: var(--foreground);
-  background: var(--muted);
 }
 
 .result {

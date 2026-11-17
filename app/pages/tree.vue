@@ -128,10 +128,6 @@ onBeforeUnmount(() => {
           из которого можно вернуться на центральный (пунктир).
         </p>
       </div>
-      <nav class="nav">
-        <NuxtLink to="/" class="nav-link">← Квинтовый круг</NuxtLink>
-        <NuxtLink to="/chords" class="nav-link">Определить аккорд</NuxtLink>
-      </nav>
     </header>
 
     <section class="controls">
@@ -285,28 +281,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   line-height: 1.45;
   color: var(--muted-foreground);
-}
-
-.nav {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.nav-link {
-  font-size: 13px;
-  color: var(--muted-foreground);
-  text-decoration: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px 12px;
-  white-space: nowrap;
-  transition: all 0.15s;
-}
-
-.nav-link:hover {
-  color: var(--foreground);
-  background: var(--muted);
 }
 
 .controls {

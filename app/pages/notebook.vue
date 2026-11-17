@@ -185,7 +185,6 @@ const dropDiagram = () => {
   <div class="notebook">
     <header class="toolbar">
       <div class="toolbar-group toolbar-group--title">
-        <NuxtLink to="/" class="nav-link">←</NuxtLink>
         <input v-model="notebook.title" class="title-input" type="text" aria-label="Название блокнота">
       </div>
 
@@ -333,7 +332,7 @@ const dropDiagram = () => {
   gap: 10px 18px;
   align-items: center;
   position: sticky;
-  top: 0;
+  top: var(--app-bar-h);
   z-index: 30;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--background) 88%, transparent);
@@ -350,19 +349,6 @@ const dropDiagram = () => {
 
 .toolbar-group--title {
   flex: 1 1 240px;
-}
-
-.nav-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--muted-foreground);
-  text-decoration: none;
-  font-size: 14px;
 }
 
 .title-input {

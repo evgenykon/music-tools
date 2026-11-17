@@ -5,11 +5,6 @@
         <h1 class="title">music-tools</h1>
         <p class="subtitle">Квинтовый круг — интерактивный инструмент для создания музыки</p>
       </div>
-      <nav class="nav">
-        <NuxtLink to="/chords" class="nav-link">Определить аккорд →</NuxtLink>
-        <NuxtLink to="/tree" class="nav-link">Дерево аккордов →</NuxtLink>
-        <NuxtLink to="/notebook" class="nav-link">Блокнот →</NuxtLink>
-      </nav>
     </header>
 
     <div class="layout">
@@ -42,28 +37,6 @@
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 32px;
-}
-
-.nav {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.nav-link {
-  font-size: 13px;
-  color: var(--muted-foreground);
-  text-decoration: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px 12px;
-  white-space: nowrap;
-  transition: all 0.15s;
-}
-
-.nav-link:hover {
-  color: var(--foreground);
-  background: var(--muted);
 }
 
 .title {
