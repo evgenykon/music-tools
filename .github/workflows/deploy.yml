@@ -27,6 +27,11 @@ jobs:
       - run: yarn generate
         env:
           NUXT_APP_BASE_URL: /music-tools/
+          NUXT_PUBLIC_BUILD_ID: ${{ github.sha }}
+      - name: Write version.json
+        run: |
+          printf '{"build":"%s","time":"%s"}\n' "$GITHUB_SHA" "$(date -u +%FT%TZ)" > .output/public/version.json
+          cat .output/public/version.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .output/public

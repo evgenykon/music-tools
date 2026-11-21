@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const route = useRoute()
+const update = useAppUpdate()
 
 const tabs = [
   { to: '/', label: 'Квинтовый круг' },
@@ -40,6 +41,11 @@ const isActive = (to: string) => route.path === to || route.path === `${to}/`
     </header>
 
     <slot />
+
+    <div v-if="update.available.value" class="update-bar" role="status">
+      <span class="update-text">Доступна новая версия приложения</span>
+      <button type="button" class="update-action" @click="update.applyUpdate()">Обновить</button>
+    </div>
   </div>
 </template>
 
@@ -117,6 +123,49 @@ const isActive = (to: string) => route.path === to || route.path === `${to}/`
   color: var(--foreground);
   background: var(--muted);
   border-color: var(--border);
+}
+
+.update-bar {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+  max-width: calc(100vw - 24px);
+}
+
+.update-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-action {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-foreground);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.update-action:hover {
+  background: color-mix(in srgb, var(--accent) 85%, var(--foreground));
 }
 
 @media (max-width: 560px) {

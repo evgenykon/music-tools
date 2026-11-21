@@ -18,6 +18,14 @@ export default defineNuxtConfig({
     plugins: [alphaTab({ assetOutputDir: false })],
   },
 
+  // Build identity: the deploy workflow passes the commit sha so the app can
+  // detect a newer deployment via /version.json.
+  runtimeConfig: {
+    public: {
+      buildId: (globalThis as any).process?.env?.NUXT_PUBLIC_BUILD_ID || "dev",
+    },
+  },
+
   modules: [
     "@nuxtjs/color-mode",
     "@nuxt/icon",
