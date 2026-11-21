@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -45,3 +45,28 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  release:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(date -u +%Y.%m.%d)-$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -n "$previous" ]; then range="$previous..$GITHUB_SHA"; else range="$GITHUB_SHA"; fi
+          {
+            echo "Сборка \`$(printf '%s' "$GITHUB_SHA" | cut -c1-7)\` — $(date -u +%Y-%m-%dT%H:%MZ)"
+            echo
+            echo "**Живая версия:** https://evgenykon.github.io/music-tools/"
+            echo
+            echo "### Изменения"
+            git log --no-merges --pretty=format:'- %s (`%h`)' "$range" | head -n 60
+          } > notes.md
+          if [ -n "$previous" ]; then echo "previous tag: $previous"; else echo "no previous tag"; fi
+          gh release create "$tag" --title "$tag" --notes-file notes.md --target "$GITHUB_SHA"
