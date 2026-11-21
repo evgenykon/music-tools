@@ -420,6 +420,9 @@ onBeforeUnmount(() => {
             {{ synth.playing.value ? '❚❚' : '▶' }}
           </button>
           <button type="button" class="button" aria-label="Стоп" @click="stopPlayback">■</button>
+          <button type="button" class="button mixer-button" @click="mixerOpen = true">
+            Микшер
+          </button>
 
           <div class="time">
             <span class="time-now">{{ positionLabel }}</span>
@@ -442,9 +445,6 @@ onBeforeUnmount(() => {
           </button>
           <button type="button" class="button" :class="{ 'button--on': synth.loop.value }" @click="toggleLoop">
             Цикл
-          </button>
-          <button type="button" class="button" @click="mixerOpen = true">
-            Микшер
           </button>
         </div>
 
@@ -641,6 +641,7 @@ onBeforeUnmount(() => {
 
 .button {
   font: inherit;
+  touch-action: manipulation;
   font-size: 13px;
   color: var(--foreground);
   background: var(--background);
@@ -863,8 +864,9 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.62);
+  /* no backdrop-filter: it breaks fixed overlays on some Android builds */
+  overscroll-behavior: contain;
 }
 
 .modal {
@@ -968,6 +970,32 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .page {
     padding: 20px 12px;
+  }
+
+  .button {
+    min-height: 40px;
+    padding: 9px 14px;
+  }
+
+  /* settings as a bottom sheet: always reachable with one hand */
+  .backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 88vh;
+    border-radius: 16px 16px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .modal-body {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mixer-head {
+    gap: 8px 10px;
   }
 
   .file-meta {
