@@ -33,13 +33,20 @@ const fileName = ref('')
 const scoreTitle = ref('')
 const tracks = ref<TrackRow[]>([])
 
+const recordTimeline = ref<{ zoomAround: (factor: number, anchor?: number) => void } | null>(null)
 const pxPerMs = ref(0.06)
 const zoomSteps = [
-  { id: 0.025, label: '¼' },
+  { id: 0.015, label: '¼' },
+  { id: 0.03, label: '½' },
   { id: 0.06, label: '1×' },
   { id: 0.12, label: '2×' },
   { id: 0.28, label: '4×' },
+  { id: 0.6, label: '8×' },
 ]
+
+function zoom(factor: number) {
+  recordTimeline.value?.zoomAround(factor)
+}
 
 const shiftMs = ref(0)
 const toleranceMs = ref(120)
@@ -539,7 +546,13 @@ onBeforeUnmount(() => {
               >
                 {{ step.label }}
               </button>
-            </div>
+              </div>
+
+              <div class="zoom-fine" role="group" aria-label="Плавный зум" title="Ctrl/⌘ + колесо — зум вокруг курсора">
+              <button type="button" class="zoom-button" aria-label="Отдалить" @click="zoom(1 / 1.4)">−</button>
+              <span class="zoom-value">{{ pxPerMs >= 0.1 ? pxPerMs.toFixed(2) : pxPerMs.toFixed(3) }}</span>
+              <button type="button" class="zoom-button" aria-label="Приблизить" @click="zoom(1.4)">+</button>
+              </div>
 
             <label class="control">
               <span class="control-label">Сдвиг записи</span>
@@ -579,6 +592,8 @@ onBeforeUnmount(() => {
         </section>
 
         <RecordTimeline
+          ref="recordTimeline"
+          v-model:px-per-ms="pxPerMs"
           :events="timelineEvents"
           :tracks="tracks"
           :bars="barMarks"
@@ -588,7 +603,8 @@ onBeforeUnmount(() => {
           :record-start-ms="recorder.recordStartMs.value"
           :shift-ms="shiftMs"
           :regions="regions"
-          :stray="summary?.stray ?? []"
+          :errors="summary?.errors ?? []"
+          :missed="(summary?.missed ?? []).map((item) => item.ms)"
           :playhead-ms="playheadMs"
           :follow="follow"
           @seek="seek"
@@ -646,9 +662,12 @@ onBeforeUnmount(() => {
           </div>
 
           <p class="analysis-legend">
-            Пунктир — место ноты по партитуре, сплошная линия — где она сыграна, красная полоса —
-            участок, где игра вышла из допуска {{ toleranceMs }} мс на две ноты и больше.
-            Бледный пунктир — одиночные промахи.
+            Каждая нота вне допуска {{ toleranceMs }} мс отмечена на графике: пунктир — место по
+            партитуре, линия со стрелкой — где сыграна.
+            <span class="chip chip--late" /> позже,
+            <span class="chip chip--early" /> раньше,
+            <span class="chip chip--missed" /> не сыграна,
+            полоса — участок вне темпа.
           </p>
 
           <p v-if="!summary.regions.length && !summary.stray.length" class="analysis-empty">
@@ -986,9 +1005,9 @@ onBeforeUnmount(() => {
 }
 
 .metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 12px 16px;
 }
 
 .metric {
@@ -1011,7 +1030,60 @@ onBeforeUnmount(() => {
 .analysis-legend {
   margin: 10px 0 0;
   font-size: 11px;
+  line-height: 1.7;
   color: var(--muted-foreground);
+}
+
+.chip {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-left: 2px;
+  vertical-align: baseline;
+}
+
+.chip--late {
+  background: #dc2626;
+}
+
+.chip--early {
+  background: #2563eb;
+}
+
+.chip--missed {
+  background: #7c3aed;
+}
+
+.zoom-fine {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.zoom-button {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  width: 24px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.zoom-button:hover {
+  background: var(--muted);
+}
+
+.zoom-value {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .analysis-empty {

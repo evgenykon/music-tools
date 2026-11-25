@@ -14,15 +14,17 @@ const props = defineProps<{
   tracks: { index: number; name: string; muted: boolean; hidden: boolean; isPercussion: boolean }[]
   bars: { ms: number; index: number }[]
   scoreDuration: number
-  pxPerMs: number
   peaks: Peaks | null
   recordStartMs: number
   shiftMs: number
   regions: TempoRegion[]
-  stray: { ms: number; detectedMs: number; dt: number }[]
+  errors: { ms: number; detectedMs: number; dt: number }[]
+  missed: number[]
   playheadMs: number
   follow: boolean
 }>()
+
+const pxPerMs = defineModel<number>('pxPerMs', { required: true })
 
 const emit = defineEmits<{
   (event: 'seek', ms: number): void
@@ -48,7 +50,7 @@ const recordEndScore = computed(() => recordStartScore.value + (props.peaks?.dur
 
 const viewStart = computed(() => Math.min(0, recordStartScore.value))
 const viewEnd = computed(() => Math.max(props.scoreDuration, recordEndScore.value, 1000) + 400)
-const contentWidth = computed(() => Math.max(200, (viewEnd.value - viewStart.value) * props.pxPerMs))
+const contentWidth = computed(() => Math.max(200, (viewEnd.value - viewStart.value) * pxPerMs.value))
 
 const noteRange = computed(() => {
   const ranges = new Map<number, { min: number; max: number }>()
@@ -86,7 +88,7 @@ function drawLane(
   timeTo: number,
   colors: ReturnType<typeof readColors>,
 ) {
-  const xs = (ms: number) => (ms - timeFrom) * props.pxPerMs
+  const xs = (ms: number) => (ms - timeFrom) * pxPerMs.value
   if (track.hidden) return
 
   // lane background + bottom border
@@ -110,7 +112,7 @@ function drawLane(
     const x = xs(event.start)
     // Drum hits are points in time, not sustained notes: a fixed tick per hit
     // reads as a rhythm instead of a solid line at slow zoom.
-    const width = event.drum ? 3 : Math.max(2, event.dur * props.pxPerMs)
+    const width = event.drum ? 3 : Math.max(2, event.dur * pxPerMs.value)
     let y: number
     let height: number
     if (event.drum) {
@@ -146,9 +148,9 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   const colors = readColors()
 
-  const timeFrom = viewStart.value + scroll.scrollLeft / props.pxPerMs
-  const timeTo = timeFrom + width / props.pxPerMs
-  const xs = (ms: number) => (ms - timeFrom) * props.pxPerMs
+  const timeFrom = viewStart.value + scroll.scrollLeft / pxPerMs.value
+  const timeTo = timeFrom + width / pxPerMs.value
+  const xs = (ms: number) => (ms - timeFrom) * pxPerMs.value
 
   ctx.fillStyle = colors.background
   ctx.fillRect(0, 0, width, height)
@@ -210,8 +212,8 @@ function draw() {
     ctx.globalAlpha = 0.85
     ctx.beginPath()
     for (let px = 0; px < width; px += 1) {
-      const fromMs = timeFrom + px / props.pxPerMs
-      const toMs = fromMs + 1 / props.pxPerMs
+      const fromMs = timeFrom + px / pxPerMs.value
+      const toMs = fromMs + 1 / pxPerMs.value
       const bucketFrom = Math.floor((fromMs - recordStartScore.value) / peaks.hopMs)
       const bucketTo = Math.ceil((toMs - recordStartScore.value) / peaks.hopMs)
       if (bucketTo < 0 || bucketFrom >= peaks.min.length) continue
@@ -230,80 +232,93 @@ function draw() {
     ctx.globalAlpha = 1
   }
 
-  // tempo error regions: red band + dashed "where the note should be" + the
-  // solid marker of where it was actually played
+  // Out-of-tempo bands, tinted by direction (late = red, early = blue).
   for (const region of props.regions) {
     const from = Math.max(xs(region.startMs), 0)
     const to = Math.min(xs(region.endMs), width)
-    if (to > 0 && from < width) {
-      ctx.fillStyle = 'rgba(220, 38, 38, 0.16)'
-      ctx.fillRect(from, RULER_H, Math.max(2, to - from), height - RULER_H)
-      ctx.fillStyle = 'rgba(220, 38, 38, 0.95)'
-      ctx.font = '10px ui-sans-serif, system-ui'
-      ctx.fillText(region.label, from + 3, waveTop - 6)
-    }
+    if (to <= 0 || from >= width) continue
+    const late = region.avgDt > 0
+    ctx.fillStyle = late ? 'rgba(220, 38, 38, 0.13)' : 'rgba(37, 99, 235, 0.13)'
+    ctx.fillRect(from, RULER_H, Math.max(2, to - from), height - RULER_H)
+    ctx.fillStyle = late ? 'rgba(220, 38, 38, 0.95)' : 'rgba(37, 99, 235, 0.95)'
+    ctx.font = '10px ui-sans-serif, system-ui'
+    ctx.fillText(region.label, from + 3, waveTop - 6)
+  }
 
-    for (const onset of region.onsets) {
-      const expectedX = Math.round(xs(onset.ms)) + 0.5
-      const playedX = Math.round(xs(onset.detectedMs)) + 0.5
-      // where it should be
-      if (expectedX > -4 && expectedX < width + 4) {
-        ctx.save()
-        ctx.setLineDash([4, 4])
-        ctx.strokeStyle = 'rgba(248, 113, 113, 0.95)'
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(expectedX, 0)
-        ctx.lineTo(expectedX, height)
-        ctx.stroke()
-        ctx.restore()
+  // Every note outside the tolerance gets its own mark: a dashed line where the
+  // score puts it, an arrow where it was played, and a connector between them.
+  const markColor = (dt: number, strong: boolean) => {
+    if (dt > 0) return strong ? 'rgba(220, 38, 38, 0.95)' : 'rgba(248, 113, 113, 0.95)'
+    return strong ? 'rgba(37, 99, 235, 0.95)' : 'rgba(96, 165, 250, 0.95)'
+  }
+  const showAmounts = pxPerMs.value > 0.1
+
+  for (const error of props.errors) {
+    const expectedX = Math.round(xs(error.ms)) + 0.5
+    const playedX = Math.round(xs(error.detectedMs)) + 0.5
+    if (expectedX > -4 && expectedX < width + 4) {
+      ctx.save()
+      ctx.setLineDash([4, 4])
+      ctx.strokeStyle = markColor(error.dt, false)
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(expectedX, RULER_H)
+      ctx.lineTo(expectedX, height)
+      ctx.stroke()
+      ctx.restore()
+    }
+    if (playedX > -4 && playedX < width + 4) {
+      ctx.strokeStyle = markColor(error.dt, true)
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(playedX, RULER_H)
+      ctx.lineTo(playedX, height - 10)
+      ctx.stroke()
+      ctx.lineWidth = 1
+      ctx.fillStyle = markColor(error.dt, true)
+      ctx.beginPath()
+      ctx.moveTo(playedX - 3.5, height - 10)
+      ctx.lineTo(playedX + 3.5, height - 10)
+      ctx.lineTo(playedX, height - 3)
+      ctx.closePath()
+      ctx.fill()
+      if (showAmounts) {
+        ctx.font = '9px ui-sans-serif, system-ui'
+        ctx.fillText(`${error.dt > 0 ? '+' : ''}${Math.round(error.dt)}`, playedX + 4, RULER_H + 9)
       }
-      // where it was played
-      if (playedX > -4 && playedX < width + 4) {
-        ctx.strokeStyle = 'rgba(220, 38, 38, 0.85)'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(playedX, RULER_H)
-        ctx.lineTo(playedX, height - 10)
-        ctx.stroke()
-        ctx.lineWidth = 1
-        // arrow head pointing at the played note
-        ctx.fillStyle = 'rgba(220, 38, 38, 0.95)'
-        ctx.beginPath()
-        ctx.moveTo(playedX - 3.5, height - 10)
-        ctx.lineTo(playedX + 3.5, height - 10)
-        ctx.lineTo(playedX, height - 3)
-        ctx.closePath()
-        ctx.fill()
-      }
-      // connector: how far the note slipped
-      if (Math.abs(playedX - expectedX) > 3) {
-        const left = Math.min(expectedX, playedX)
-        const right = Math.max(expectedX, playedX)
-        ctx.strokeStyle = 'rgba(220, 38, 38, 0.35)'
-        ctx.beginPath()
-        ctx.moveTo(left, waveTop - 12)
-        ctx.lineTo(right, waveTop - 12)
-        ctx.stroke()
-      }
+    }
+    if (Math.abs(playedX - expectedX) > 3) {
+      const left = Math.min(expectedX, playedX)
+      const right = Math.max(expectedX, playedX)
+      ctx.strokeStyle = markColor(error.dt, false)
+      ctx.globalAlpha = 0.45
+      ctx.beginPath()
+      ctx.moveTo(left, waveTop - 12)
+      ctx.lineTo(right, waveTop - 12)
+      ctx.stroke()
+      ctx.globalAlpha = 1
     }
   }
 
-  // single slips that never group into a region: pale dashed marker only
-  for (const onset of props.stray) {
-    const expectedX = Math.round(xs(onset.ms)) + 0.5
-    const playedX = Math.round(xs(onset.detectedMs)) + 0.5
+  // Notes the player never played: violet cross where they belong.
+  for (const ms of props.missed) {
+    const expectedX = Math.round(xs(ms)) + 0.5
     if (expectedX < -4 || expectedX > width + 4) continue
     ctx.save()
-    ctx.setLineDash([3, 5])
-    ctx.strokeStyle = 'rgba(248, 113, 113, 0.5)'
+    ctx.setLineDash([2, 5])
+    ctx.strokeStyle = 'rgba(167, 139, 250, 0.9)'
     ctx.beginPath()
     ctx.moveTo(expectedX, RULER_H)
-    ctx.lineTo(expectedX, height - 4)
+    ctx.lineTo(expectedX, height)
     ctx.stroke()
     ctx.restore()
-    ctx.fillStyle = 'rgba(248, 113, 113, 0.65)'
-    ctx.fillRect(playedX - 1, height - 12, 3, 8)
+    ctx.strokeStyle = 'rgba(124, 58, 237, 0.95)'
+    ctx.beginPath()
+    ctx.moveTo(expectedX - 3, waveTop + 4)
+    ctx.lineTo(expectedX + 3, waveTop + 10)
+    ctx.moveTo(expectedX + 3, waveTop + 4)
+    ctx.lineTo(expectedX - 3, waveTop + 10)
+    ctx.stroke()
   }
 
   // playhead
@@ -332,12 +347,41 @@ function onScroll() {
   scheduleDraw()
 }
 
+const MIN_PX = 0.008
+const MAX_PX = 0.6
+
+/** Zoom keeping the time under the pointer (or the centre) in place. */
+function zoomAround(factor: number, anchorClientX?: number) {
+  const scroll = scrollEl.value
+  if (!scroll) return
+  const next = Math.min(MAX_PX, Math.max(MIN_PX, pxPerMs.value * factor))
+  if (Math.abs(next - pxPerMs.value) < 1e-9) return
+  const anchorOffset = anchorClientX == null
+    ? scroll.clientWidth / 2
+    : anchorClientX - scroll.getBoundingClientRect().left
+  const anchorTime = viewStart.value + (scroll.scrollLeft + anchorOffset) / pxPerMs.value
+  pxPerMs.value = Math.round(next * 10000) / 10000
+  nextTick(() => {
+    const element = scrollEl.value
+    if (!element) return
+    element.scrollLeft = Math.max(0, (anchorTime - viewStart.value) * pxPerMs.value - anchorOffset)
+    scheduleDraw()
+  })
+}
+
+/** Ctrl/⌘ + колесо — зум вокруг курсора, обычное колесо — обычный скролл. */
+function onWheel(event: WheelEvent) {
+  if (!event.ctrlKey && !event.metaKey) return
+  event.preventDefault()
+  zoomAround(event.deltaY < 0 ? 1.18 : 1 / 1.18, event.clientX)
+}
+
 function msFromEvent(event: MouseEvent | PointerEvent) {
   const scroll = scrollEl.value
   if (!scroll) return 0
   const rect = scroll.getBoundingClientRect()
   const x = event.clientX - rect.left + scroll.scrollLeft
-  return viewStart.value + x / props.pxPerMs
+  return viewStart.value + x / pxPerMs.value
 }
 
 let scrubbing = false
@@ -364,7 +408,7 @@ watch(
     scheduleDraw()
     const scroll = scrollEl.value
     if (!scroll || !props.follow) return
-    const x = (ms - viewStart.value) * props.pxPerMs
+    const x = (ms - viewStart.value) * pxPerMs.value
     const right = scroll.scrollLeft + scroll.clientWidth
     if (x > right - 80) scroll.scrollLeft = x - scroll.clientWidth * 0.35
     else if (x < scroll.scrollLeft) scroll.scrollLeft = Math.max(0, x - 80)
@@ -372,7 +416,7 @@ watch(
 )
 
 watch(
-  () => [props.pxPerMs, props.peaks, props.regions, props.stray, props.tracks, props.shiftMs, props.bars],
+  () => [pxPerMs.value, props.peaks, props.regions, props.errors, props.missed, props.tracks, props.shiftMs, props.bars],
   () => scheduleDraw(),
   { deep: true },
 )
@@ -387,17 +431,19 @@ onMounted(() => {
     scheduleDraw()
   })
   if (scroller) observer.observe(scroller)
+  scroller?.addEventListener('wheel', onWheel, { passive: false })
   window.addEventListener('pointerup', onPointerUp)
   scheduleDraw()
 })
 
 onBeforeUnmount(() => {
   observer?.disconnect()
+  scrollEl.value?.removeEventListener('wheel', onWheel)
   window.removeEventListener('pointerup', onPointerUp)
   if (frame) cancelAnimationFrame(frame)
 })
 
-defineExpose({ redraw: scheduleDraw })
+defineExpose({ redraw: scheduleDraw, zoomAround })
 </script>
 
 <template>

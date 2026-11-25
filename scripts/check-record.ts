@@ -218,6 +218,11 @@ function clicks(timesMs: number[], sampleRate = 48000) {
   check('analyzeTempo: средняя ошибка', Math.round(summary.meanAbsDt) === 70, `${summary.meanAbsDt.toFixed(1)}`)
   check('analyzeTempo: регион', summary.regions.length === 1 && summary.regions[0]!.count === 2, `${summary.regions.length}`)
   check('analyzeTempo: одиночные промахи отделены от регионов', summary.stray.length === 0, `${summary.stray.length}`)
+  check(
+    'analyzeTempo: все ошибки в списке для графика',
+    summary.errors.length === 2 && summary.errors.every((item) => item.dt > 0),
+    summary.errors.map((item) => item.dt).join(','),
+  )
 }
 
 if (failures) {

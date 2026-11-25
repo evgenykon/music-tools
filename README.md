@@ -32,10 +32,12 @@ An interactive circle of fifths — a tool for exploring harmony, building chord
   then the score and the microphone start together. The take is drawn under the note lanes on one
   shared horizontal timeline (one lane per track, tracks can be hidden or muted) and grows live while
   recording; every take is played back sample-locked with the score, alone or together with it, from
-  any point, and exported as WAV. «Анализ темпа» compares the take with the notes of a chosen track
-  and marks slips in red: a dashed line where the note belongs, a solid line where it was actually
-  played, and a band over the whole out-of-tempo stretch, plus hit rate, mean/worst deviation and
-  drift ([`/record`](https://evgenykon.github.io/music-tools/record))
+  any point, and exported as WAV. The timeline zooms ¼…8× (buttons, or Ctrl/⌘ + wheel around the
+  cursor). «Анализ темпа» compares the take with the notes of a chosen track and marks every note
+  that left the tolerance: dashed line where the note belongs, arrow where it was played — red for
+  late, blue for early, violet for a note that was never played — plus a tinted band over each
+  out-of-tempo stretch, hit rate, mean/worst deviation, drift and a list of slips by bar and beat
+  ([`/record`](https://evgenykon.github.io/music-tools/record))
 
 ## Getting started
 

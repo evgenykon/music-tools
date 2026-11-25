@@ -59,6 +59,8 @@ export interface TempoSummary {
   regions: TempoRegion[]
   /** Notes outside the tolerance that did not become a whole region. */
   stray: MatchedOnset[]
+  /** Every note outside the tolerance — early and late — for the graph marks. */
+  errors: MatchedOnset[]
   hitRate: number
   meanAbsDt: number
   maxAbsDt: number
@@ -321,7 +323,8 @@ export function analyzeTempo(input: {
   const regions = tempoRegions(matched, input.options)
   const inRegion = new Set(regions.flatMap((region) => region.onsets.map((onset) => onset.ms)))
   const threshold = input.options?.thresholdMs ?? 120
-  const stray = matched.filter((onset) => Math.abs(onset.dt) > threshold && !inRegion.has(onset.ms))
+  const errors = matched.filter((onset) => Math.abs(onset.dt) > threshold)
+  const stray = errors.filter((onset) => !inRegion.has(onset.ms))
   const absDts = matched.map((item) => Math.abs(item.dt))
   const { slope, verdict } = tempoTrend(matched)
 
@@ -331,6 +334,7 @@ export function analyzeTempo(input: {
     extra,
     regions,
     stray,
+    errors,
     hitRate: expected.length ? matched.length / expected.length : 0,
     meanAbsDt: absDts.length ? absDts.reduce((sum, value) => sum + value, 0) / absDts.length : 0,
     maxAbsDt: absDts.length ? Math.max(...absDts) : 0,
