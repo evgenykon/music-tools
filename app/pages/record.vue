@@ -59,6 +59,8 @@ const withScore = ref(true)
 const playing = ref(false)
 
 const regions = ref<TempoRegion[]>([])
+/** Onsets the detector heard in the take, in score time — drawn as ticks. */
+const detectedOnsets = ref<number[]>([])
 const summary = ref<TempoSummary | null>(null)
 const analysisDone = ref(false)
 
@@ -241,6 +243,7 @@ let autoStop: number | null = null
 
 function clearTake() {
   recorder.clearTake()
+  detectedOnsets.value = []
   regions.value = []
   summary.value = null
   analysisDone.value = false
@@ -371,6 +374,7 @@ function analyze() {
   const detected = onsets
     .map((time) => time - takeStart)
     .filter((time) => time >= -500 && time <= scoreDuration.value + 800)
+  detectedOnsets.value = detected
 
   // Percussion is never part of the comparison: its hits are not something the
   // player repeats on the recorded instrument.
@@ -651,6 +655,7 @@ onBeforeUnmount(() => {
           :regions="regions"
           :errors="summary?.errors ?? []"
           :missed="(summary?.missed ?? []).map((item) => item.ms)"
+          :detected="detectedOnsets"
           :playhead-ms="playheadMs"
           :follow="follow"
           @seek="seek"
@@ -722,7 +727,8 @@ onBeforeUnmount(() => {
             <span class="chip chip--late" /> позже,
             <span class="chip chip--early" /> раньше,
             <span class="chip chip--missed" /> не сыграна,
-            полоса — участок вне темпа.
+            полоса — участок вне темпа; мелкие штрихи внизу дорожки записи — где детектор
+            услышал удар.
           </p>
 
           <p v-if="!summary.regions.length && !summary.stray.length" class="analysis-empty">

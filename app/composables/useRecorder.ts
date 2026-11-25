@@ -148,7 +148,10 @@ export function createRecorder(options: RecorderOptions) {
         numberOfOutputs: 1,
         outputChannelCount: [1],
       })
-      worklet.port.onmessage = (event: MessageEvent) => pushBlock(event.data as Float32Array)
+      worklet.port.onmessage = (event: MessageEvent) => {
+        const data = event.data as { samples: Float32Array; startTime?: number }
+        pushBlock(data.samples, data.startTime)
+      }
       inputGain.connect(worklet)
       worklet.connect(silent)
       return
@@ -161,10 +164,15 @@ export function createRecorder(options: RecorderOptions) {
     fallback.connect(silent)
   }
 
-  function pushBlock(block: Float32Array) {
+  function pushBlock(block: Float32Array, audioStartTime?: number) {
     if (status.value !== 'recording' && status.value !== 'countIn') return
     blocks.push(block)
-    if (!capturedSamples) captureStartCtx = options.getContext()?.currentTime ?? 0
+    if (!capturedSamples) {
+      // Prefer the exact audio time reported by the worklet: the message arrives
+      // a few tens of ms later and using that made the take look systematically
+      // late both on the timeline and in the tempo analysis.
+      captureStartCtx = audioStartTime ?? options.getContext()?.currentTime ?? 0
+    }
     capturedSamples += block.length
   }
 

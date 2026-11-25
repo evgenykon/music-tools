@@ -20,6 +20,7 @@ const props = defineProps<{
   regions: TempoRegion[]
   errors: { ms: number; detectedMs: number; dt: number; residual?: number }[]
   missed: number[]
+  detected: number[]
   playheadMs: number
   follow: boolean
 }>()
@@ -232,6 +233,23 @@ function draw() {
     ctx.globalAlpha = 1
   }
 
+  // Where the detector actually heard a hit: short ticks along the bottom of
+  // the take lane. If they do not sit on the waveform peaks, the detector is
+  // wrong — and that is visible instead of guessed.
+  if (props.detected.length) {
+    ctx.strokeStyle = colors.foreground
+    ctx.globalAlpha = 0.45
+    ctx.beginPath()
+    for (const ms of props.detected) {
+      const x = Math.round(xs(ms)) + 0.5
+      if (x < -1 || x > width + 1) continue
+      ctx.moveTo(x, waveTop + WAVE_H - 7)
+      ctx.lineTo(x, waveTop + WAVE_H - 1)
+    }
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
   // Out-of-tempo bands, tinted by direction (late = red, early = blue).
   for (const region of props.regions) {
     const from = Math.max(xs(region.startMs), 0)
@@ -302,24 +320,23 @@ function draw() {
     }
   }
 
-  // Notes the player never played: violet cross where they belong.
+  // Notes the player never played: a small violet cross on the top edge of the
+  // take lane. Full-height dashes per missed note buried the graph when many
+  // notes of the reference track were not played.
   for (const ms of props.missed) {
     const expectedX = Math.round(xs(ms)) + 0.5
     if (expectedX < -4 || expectedX > width + 4) continue
-    ctx.save()
-    ctx.setLineDash([2, 5])
-    ctx.strokeStyle = 'rgba(167, 139, 250, 0.9)'
+    ctx.strokeStyle = 'rgba(248, 113, 113, 0.5)'
     ctx.beginPath()
     ctx.moveTo(expectedX, RULER_H)
-    ctx.lineTo(expectedX, height)
+    ctx.lineTo(expectedX, RULER_H + 4)
     ctx.stroke()
-    ctx.restore()
-    ctx.strokeStyle = 'rgba(124, 58, 237, 0.95)'
+    ctx.strokeStyle = 'rgba(167, 139, 250, 0.95)'
     ctx.beginPath()
-    ctx.moveTo(expectedX - 3, waveTop + 4)
-    ctx.lineTo(expectedX + 3, waveTop + 10)
-    ctx.moveTo(expectedX + 3, waveTop + 4)
-    ctx.lineTo(expectedX - 3, waveTop + 10)
+    ctx.moveTo(expectedX - 2.5, waveTop + 2)
+    ctx.lineTo(expectedX + 2.5, waveTop + 7)
+    ctx.moveTo(expectedX + 2.5, waveTop + 2)
+    ctx.lineTo(expectedX - 2.5, waveTop + 7)
     ctx.stroke()
   }
 
@@ -418,7 +435,7 @@ watch(
 )
 
 watch(
-  () => [pxPerMs.value, props.peaks, props.regions, props.errors, props.missed, props.tracks, props.shiftMs, props.bars],
+  () => [pxPerMs.value, props.peaks, props.regions, props.errors, props.missed, props.detected, props.tracks, props.shiftMs, props.bars],
   () => scheduleDraw(),
   { deep: true },
 )
