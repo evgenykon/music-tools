@@ -6,6 +6,7 @@ import {
   analyzeTempo,
   barAt,
   detectOnsets,
+  alignmentOffset,
   type TempoRegion,
   type TempoSummary,
 } from '~/composables/useTempoAnalysis'
@@ -143,6 +144,13 @@ async function loadBuffer(buffer: ArrayBuffer, name: string) {
     regions.value = []
     summary.value = null
     analysisDone.value = false
+    // Reference defaults to the melodic track with the most notes: comparing a
+    // guitar take against the drum part only produces «не сыграно» everywhere.
+    const melodic = tracks.value
+      .filter((row) => !row.isPercussion)
+      .map((row) => ({ row, notes: synth.timeline.events.filter((event) => event.track === row.index).length }))
+      .sort((a, b) => b.notes - a.notes)
+    referenceTrack.value = melodic.length ? melodic[0]!.row.index : 'all'
     loaded.value = true
     recorder.clearTake()
     applyAutoShift()
@@ -223,6 +231,7 @@ function applyAutoShift() {
   const ctx = synth.context
   if (!ctx) return
   const latency = ((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000
+    + recorder.inputLatencyMs.value
   shiftMs.value = Math.round(Math.min(300, Math.max(0, latency)))
 }
 
@@ -363,9 +372,14 @@ function analyze() {
     .map((time) => time - takeStart)
     .filter((time) => time >= -500 && time <= scoreDuration.value + 800)
 
+  // Percussion is never part of the comparison: its hits are not something the
+  // player repeats on the recorded instrument.
+  const melodicVisible = tracks.value
+    .filter((row) => !row.hidden && !row.isPercussion)
+    .map((row) => row.index)
   const reference =
     referenceTrack.value === 'all'
-      ? tracks.value.filter((row) => !row.hidden).map((row) => row.index)
+      ? melodicVisible
       : [referenceTrack.value]
 
   const result = analyzeTempo({
@@ -393,6 +407,27 @@ const regionRows = computed<RegionRow[]>(() => {
       direction: worst > 0 ? `позже на ${Math.abs(Math.round(worst))} мс` : `раньше на ${Math.abs(Math.round(worst))} мс`,
     }
   })
+})
+
+/** Shifts the take by the median deviation so the notes stop looking late/early. */
+function alignTake() {
+  const matched = summary.value?.matched ?? []
+  if (!matched.length) return
+  const offset = alignmentOffset(matched)
+  if (!offset) return
+  shiftMs.value = Math.min(300, Math.max(-300, shiftMs.value + offset))
+  analyze()
+}
+
+const referenceLabel = computed(() => {
+  if (referenceTrack.value === 'all') return 'все мелодические дорожки'
+  const row = tracks.value.find((item) => item.index === referenceTrack.value)
+  return row?.name ?? 'дорожка'
+})
+
+const alignHint = computed(() => {
+  const offset = summary.value?.offsetMs ?? 0
+  return Math.abs(offset) > 40 ? offset : null
 })
 
 function focusRegion(region: TempoRegion) {
@@ -429,7 +464,18 @@ onMounted(() => {
   // Dev-only handle for browser checks: inject a take or inspect refs without a
   // microphone. Never included in the production build.
   if (import.meta.dev) {
-    ;(window as any).__recordDebug = { synth, recorder, analyze, seek, playheadMs, shiftMs, toleranceMs }
+    ;(window as any).__recordDebug = {
+      synth,
+      recorder,
+      analyze,
+      seek,
+      playheadMs,
+      shiftMs,
+      toleranceMs,
+      summary,
+      regions,
+      referenceTrack,
+    }
   }
 })
 
@@ -569,9 +615,9 @@ onBeforeUnmount(() => {
             <label class="control">
               <span class="control-label">Сравнивать с</span>
               <select v-model="referenceTrack" class="select">
-                <option value="all">всеми видимыми</option>
+                <option value="all">всеми мелодическими</option>
                 <option v-for="track in tracks" :key="track.index" :value="track.index">
-                  {{ track.name }}
+                  {{ track.name }}{{ track.isPercussion ? ' (ударные)' : '' }}
                 </option>
               </select>
             </label>
@@ -625,6 +671,15 @@ onBeforeUnmount(() => {
               }}
             </span>
           </div>
+
+          <p class="analysis-source">
+            Сравнение с «{{ referenceLabel }}» · в партитуре {{ summary.expectedCount }} онсетов ·
+            в записи найдено {{ summary.detectedCount }} · допуск {{ toleranceMs }} мс
+            <span v-if="alignHint !== null" class="analysis-offset">
+              запись сдвинута на {{ alignHint > 0 ? '+' : '' }}{{ alignHint }} мс —
+              <button type="button" class="link-button" @click="alignTake">выровнять</button>
+            </span>
+          </p>
 
           <div class="metrics">
             <div class="metric">
@@ -1025,6 +1080,29 @@ onBeforeUnmount(() => {
 .metric-label {
   font-size: 11px;
   color: var(--muted-foreground);
+}
+
+.analysis-source {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.analysis-offset {
+  display: inline-block;
+  margin-left: 6px;
+  color: #d9534f;
+}
+
+.link-button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .analysis-legend {

@@ -12,6 +12,7 @@ import {
   detectOnsets,
   expectedOnsets,
   matchOnsets,
+  alignmentOffset,
   tempoRegions,
   tempoTrend,
 } from '../app/composables/useTempoAnalysis.ts'
@@ -141,12 +142,10 @@ function clicks(timesMs: number[], sampleRate = 48000) {
 // ---- regions ----------------------------------------------------------------
 
 {
-  const matched = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500].map((ms, index) => ({
-    ms,
-    index,
-    detectedMs: ms + (index >= 3 && index <= 4 ? 200 : 10),
-    dt: index >= 3 && index <= 4 ? 200 : 10,
-  }))
+  const matched = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500].map((ms, index) => {
+    const dt = index >= 3 && index <= 4 ? 200 : 10
+    return { ms, index, detectedMs: ms + dt, dt, residual: dt }
+  })
   const regions = tempoRegions(matched, { thresholdMs: 120, minRun: 2, padMs: 50 })
   check('tempoRegions: один регион', regions.length === 1, `${regions.length}`)
   check('tempoRegions: границы', regions[0]?.startMs === 1450 && regions[0]?.endMs === 2050, `${regions[0]?.startMs}…${regions[0]?.endMs}`)
@@ -161,13 +160,19 @@ function clicks(timesMs: number[], sampleRate = 48000) {
 }
 
 {
-  const matched = [0, 500, 1000].map((ms, index) => ({ ms, index, detectedMs: ms, dt: index === 1 ? 400 : 0 }))
+  const matched = [0, 500, 1000].map((ms, index) => {
+    const dt = index === 1 ? 400 : 0
+    return { ms, index, detectedMs: ms + dt, dt, residual: dt }
+  })
   const regions = tempoRegions(matched, { thresholdMs: 120, minRun: 2, padMs: 0 })
   check('tempoRegions: одиночная грубая ошибка ловится', regions.length === 1)
 }
 
 {
-  const matched = [0, 500, 1000].map((ms, index) => ({ ms, index, detectedMs: ms, dt: index === 1 ? 150 : 0 }))
+  const matched = [0, 500, 1000].map((ms, index) => {
+    const dt = index === 1 ? 150 : 0
+    return { ms, index, detectedMs: ms + dt, dt, residual: dt }
+  })
   const regions = tempoRegions(matched, { thresholdMs: 120, minRun: 2 })
   check('tempoRegions: одиночная мелкая ошибка не ловится', regions.length === 0)
 }
@@ -176,13 +181,57 @@ function clicks(timesMs: number[], sampleRate = 48000) {
   const matched = Array.from({ length: 10 }, (_unused, index) => ({
     ms: index * 500,
     index,
-    detectedMs: index * 500,
+    detectedMs: index * 500 + 30 * index,
     dt: 30 * index,
+    residual: 30 * index,
   }))
   const { slope, verdict } = tempoTrend(matched)
   check('tempoTrend: отставание', Math.abs(slope - 30) < 1e-6 && verdict === 'dragging', `${slope.toFixed(1)} ${verdict}`)
-  const rushing = tempoTrend(matched.map((item) => ({ ...item, dt: -30 * item.index })))
+  const rushing = tempoTrend(matched.map((item) => ({ ...item, dt: -30 * item.index, residual: -30 * item.index })))
   check('tempoTrend: спешка', rushing.verdict === 'rushing', `${rushing.slope.toFixed(1)}`)
+}
+
+// ---- large slips ------------------------------------------------------------
+
+{
+  const events = Array.from({ length: 6 }, (_unused, index) => ({ track: 0, note: 60, start: index * 500, dur: 200 }))
+  const expected = expectedOnsets(events, [0])
+  // вся запись на 300 мс позже — раньше это считалось «не сыграно»
+  const detected = [300, 800, 1300, 1800, 2300, 2800]
+  const { matched, missed } = matchOnsets(expected, detected, 250)
+  check('matchOnsets: сдвиг больше окна всё равно сопоставлен', matched.length === 6, `${matched.length}`)
+  check('matchOnsets: сдвиг помечен как ошибка 300 мс', matched.every((item) => item.dt === 300))
+  check('matchOnsets: не сыграно пусто', missed.length === 0, `${missed.length}`)
+}
+
+// ---- alignment --------------------------------------------------------------
+
+{
+  const matched = [0, 500, 1000, 1500, 2000].map((ms, index) => ({
+    ms,
+    index,
+    detectedMs: ms + (index === 4 ? 400 : 90),
+    dt: index === 4 ? 400 : 90,
+  }))
+  check('alignmentOffset: медиана устойчива к выбросу', alignmentOffset(matched) === 90, `${alignmentOffset(matched)}`)
+  check('alignmentOffset: пусто = 0', alignmentOffset([]) === 0)
+}
+
+// ---- systematic lateness ----------------------------------------------------
+
+{
+  const events = Array.from({ length: 8 }, (_unused, index) => ({ track: 0, note: 60, start: index * 500, dur: 200 }))
+  // вся запись на 90 мс позже + две ноты реально сбились ещё на 200
+  const detected = [90, 590, 1090, 1590, 2290, 2790, 3090, 3590]
+  const summary = analyzeTempo({ events, tracks: [0], detected, options: { thresholdMs: 120 } })
+  check('analyzeTempo: общий сдвиг распознан', summary.offsetMs === 90, `${summary.offsetMs}`)
+  check(
+    'analyzeTempo: задержка не превращается в ошибки',
+    summary.errors.length === 2,
+    summary.errors.map((item) => Math.round(item.residual)).join(','),
+  )
+  check('analyzeTempo: отклонения считаются от сдвига', summary.hitRate > 0.7, `${summary.hitRate.toFixed(2)}`)
+  check('analyzeTempo: подсказка выравнивания', alignmentOffset(summary.matched) === 90, `${alignmentOffset(summary.matched)}`)
 }
 
 // ---- ruler lookup -----------------------------------------------------------
@@ -214,15 +263,16 @@ function clicks(timesMs: number[], sampleRate = 48000) {
     detected: [0, 500, 1000, 1700, 2200, 2520],
     options: { thresholdMs: 120 },
   })
-  check('analyzeTempo: попадания', Math.round(summary.hitRate * 100) === 100, `${summary.hitRate}`)
-  check('analyzeTempo: средняя ошибка', Math.round(summary.meanAbsDt) === 70, `${summary.meanAbsDt.toFixed(1)}`)
+  check('analyzeTempo: попадания', Math.round(summary.hitRate * 100) === 67, `${summary.hitRate.toFixed(2)}`)
+  check('analyzeTempo: средняя ошибка', Math.round(summary.meanAbsDt) === 200, `${summary.meanAbsDt.toFixed(1)}`)
   check('analyzeTempo: регион', summary.regions.length === 1 && summary.regions[0]!.count === 2, `${summary.regions.length}`)
   check('analyzeTempo: одиночные промахи отделены от регионов', summary.stray.length === 0, `${summary.stray.length}`)
   check(
     'analyzeTempo: все ошибки в списке для графика',
-    summary.errors.length === 2 && summary.errors.every((item) => item.dt > 0),
-    summary.errors.map((item) => item.dt).join(','),
+    summary.errors.length === 2 && summary.errors.every((item) => item.residual > 0),
+    summary.errors.map((item) => item.residual).join(','),
   )
+  check('analyzeTempo: общий сдвиг записи', summary.offsetMs === 0, `${summary.offsetMs}`)
 }
 
 if (failures) {

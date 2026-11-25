@@ -18,7 +18,7 @@ const props = defineProps<{
   recordStartMs: number
   shiftMs: number
   regions: TempoRegion[]
-  errors: { ms: number; detectedMs: number; dt: number }[]
+  errors: { ms: number; detectedMs: number; dt: number; residual?: number }[]
   missed: number[]
   playheadMs: number
   follow: boolean
@@ -254,12 +254,14 @@ function draw() {
   const showAmounts = pxPerMs.value > 0.1
 
   for (const error of props.errors) {
+    // residual is the mistake after the whole-take offset is removed
+    const deviation = error.residual ?? error.dt
     const expectedX = Math.round(xs(error.ms)) + 0.5
     const playedX = Math.round(xs(error.detectedMs)) + 0.5
     if (expectedX > -4 && expectedX < width + 4) {
       ctx.save()
       ctx.setLineDash([4, 4])
-      ctx.strokeStyle = markColor(error.dt, false)
+      ctx.strokeStyle = markColor(deviation, false)
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(expectedX, RULER_H)
@@ -268,14 +270,14 @@ function draw() {
       ctx.restore()
     }
     if (playedX > -4 && playedX < width + 4) {
-      ctx.strokeStyle = markColor(error.dt, true)
+      ctx.strokeStyle = markColor(deviation, true)
       ctx.lineWidth = 2
       ctx.beginPath()
       ctx.moveTo(playedX, RULER_H)
       ctx.lineTo(playedX, height - 10)
       ctx.stroke()
       ctx.lineWidth = 1
-      ctx.fillStyle = markColor(error.dt, true)
+      ctx.fillStyle = markColor(deviation, true)
       ctx.beginPath()
       ctx.moveTo(playedX - 3.5, height - 10)
       ctx.lineTo(playedX + 3.5, height - 10)
@@ -284,13 +286,13 @@ function draw() {
       ctx.fill()
       if (showAmounts) {
         ctx.font = '9px ui-sans-serif, system-ui'
-        ctx.fillText(`${error.dt > 0 ? '+' : ''}${Math.round(error.dt)}`, playedX + 4, RULER_H + 9)
+        ctx.fillText(`${deviation > 0 ? '+' : ''}${Math.round(deviation)}`, playedX + 4, RULER_H + 9)
       }
     }
     if (Math.abs(playedX - expectedX) > 3) {
       const left = Math.min(expectedX, playedX)
       const right = Math.max(expectedX, playedX)
-      ctx.strokeStyle = markColor(error.dt, false)
+      ctx.strokeStyle = markColor(deviation, false)
       ctx.globalAlpha = 0.45
       ctx.beginPath()
       ctx.moveTo(left, waveTop - 12)

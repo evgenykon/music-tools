@@ -30,6 +30,8 @@ export function createRecorder(options: RecorderOptions) {
   const clipping = ref(0)
   const deviceLabel = ref('')
   const sampleRate = ref(48000)
+  /** Reported input latency of the capture device, ms (0 when unknown). */
+  const inputLatencyMs = ref(0)
 
   /** Full take, mono. */
   const samples = shallowRef<Float32Array | null>(null)
@@ -105,6 +107,9 @@ export function createRecorder(options: RecorderOptions) {
     deviceLabel.value = track?.label || 'Микрофон'
     const settings: any = track?.getSettings?.() ?? {}
     if (settings.sampleRate) sampleRate.value = settings.sampleRate
+    // Chromium reports this in seconds; it is the missing part of the take's
+    // delay next to the output latency.
+    if (typeof settings.latency === 'number') inputLatencyMs.value = Math.round(settings.latency * 1000)
   }
 
   function buildGraph(ctx: AudioContext) {
@@ -352,6 +357,7 @@ export function createRecorder(options: RecorderOptions) {
     clipping,
     deviceLabel,
     sampleRate,
+    inputLatencyMs,
     samples,
     peaks,
     livePeaks,

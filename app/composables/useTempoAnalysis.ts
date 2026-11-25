@@ -4,8 +4,13 @@
  * Pure module on purpose: no Vue, no DOM, no browser types — the same code runs
  * in the container from `scripts/check-record.ts` and in the page.
  *
- * Pipeline: expected onsets (from the score timeline) → detected onsets (from
- * the recorded samples) → greedy match → deviation per onset → error regions.
+ * Pipeline: expected onsets (score) → detected onsets (take) → global offset →
+ * order-preserving match → residual deviation per onset → error regions.
+ *
+ * The global offset matters: a take recorded through a microphone is a few tens
+ * of milliseconds late as a whole. Without removing it every single note looks
+ * like a mistake, so the offset is estimated first, reported separately
+ * (`offsetMs`) and the page offers to shift the take by it.
  */
 
 export interface TempEvent {
@@ -25,8 +30,10 @@ export interface ExpectedOnset {
 export interface MatchedOnset extends ExpectedOnset {
   /** Recorded onset converted to score time, ms. */
   detectedMs: number
-  /** detectedMs − ms: positive = played late. */
+  /** detectedMs − ms: absolute lateness, including the global offset. */
   dt: number
+  /** dt − offsetMs: the mistake of this particular note. */
+  residual: number
 }
 
 export interface MissedOnset extends ExpectedOnset {
@@ -36,11 +43,11 @@ export interface MissedOnset extends ExpectedOnset {
 export interface TempoRegion {
   /** Score time where the slip starts, ms. */
   startMs: number
-  /** Score time where it ends (start of the last bad onset + one slot). */
+  /** Score time where it ends. */
   endMs: number
-  /** Mean deviation inside the region, ms (positive = late). */
+  /** Mean residual inside the region, ms (positive = late). */
   avgDt: number
-  /** Worst deviation inside the region, ms. */
+  /** Worst residual inside the region, ms. */
   worstDt: number
   /** Number of onsets in the region. */
   count: number
@@ -61,13 +68,20 @@ export interface TempoSummary {
   stray: MatchedOnset[]
   /** Every note outside the tolerance — early and late — for the graph marks. */
   errors: MatchedOnset[]
+  /** Share of notes whose residual stays inside the tolerance. */
   hitRate: number
   meanAbsDt: number
   maxAbsDt: number
-  /** Regression slope, ms of deviation gained per onset. */
+  /** Regression slope of the residual, ms of deviation per onset. */
   driftPerOnset: number
   /** Human answer for the drift. */
   verdict: 'even' | 'rushing' | 'dragging'
+  /** Systematic lateness of the whole take, ms — «выровнять» uses it. */
+  offsetMs: number
+  /** How many onsets the reference track(s) contain. */
+  expectedCount: number
+  /** How many onsets the detector found in the take. */
+  detectedCount: number
 }
 
 export interface DetectOptions {
@@ -167,7 +181,7 @@ export function detectOnsets(
     const threshold = Math.max(floor, base * factor, globalMax * 0.05)
     if (level < threshold) continue
 
-    // Walk to the local maximum of this attack, that is the real hit.
+    // Walk to the local maximum of this attack — that is the real hit.
     let peakFrame = frame
     const horizon = Math.min(frames - 1, frame + Math.round(40 / hopMs))
     while (peakFrame < horizon && envelope[peakFrame + 1]! >= envelope[peakFrame]!) peakFrame += 1
@@ -180,49 +194,173 @@ export function detectOnsets(
 }
 
 /**
- * Greedy time-ordered matching: each expected onset takes the closest unused
- * detected onset inside ±windowMs.
+ * Most likely constant lateness of the take: the offset the largest number of
+ * (detected − expected) pairs agree on, within `toleranceMs`.
+ */
+export function estimateOffset(
+  expected: number[],
+  detected: number[],
+  maxMs = 600,
+  toleranceMs = 60,
+): number {
+  if (!expected.length || !detected.length) return 0
+  const hist = new Map<number, number>()
+  for (const e of expected) {
+    for (const d of detected) {
+      const diff = d - e
+      if (Math.abs(diff) > maxMs) continue
+      const key = Math.round(diff / 10) * 10
+      hist.set(key, (hist.get(key) ?? 0) + 1)
+    }
+  }
+  let best = 0
+  let bestScore = -1
+  for (const key of hist.keys()) {
+    let score = 0
+    for (const [other, count] of hist) {
+      if (Math.abs(other - key) <= toleranceMs) score += count
+    }
+    if (score > bestScore) {
+      bestScore = score
+      best = key
+    }
+  }
+  return best
+}
+
+/**
+ * Order-preserving matching around the estimated offset, with a second pass for
+ * notes that fall far outside the window, so a whole-beat slip shows up as a
+ * mistake instead of vanishing into «не сыграно».
  */
 export function matchOnsets(
   expected: ExpectedOnset[],
   detected: number[],
-  windowMs = 250,
-): { matched: MatchedOnset[]; missed: MissedOnset[]; extra: number[] } {
+  // Narrow on purpose: on a dense grid a note played 200 ms late sits closer to
+  // the *next* expected note than to its own, and a wide window pairs them
+  // wrongly. Anything outside this window is handled by the ordered second pass.
+  windowMs = 80,
+): { matched: MatchedOnset[]; missed: MissedOnset[]; extra: number[]; offsetMs: number } {
+  const offsetMs = estimateOffset(
+    expected.map((item) => item.ms),
+    detected,
+  )
   const used = new Uint8Array(detected.length)
   const matched: MatchedOnset[] = []
-  const missed: MissedOnset[] = []
   let cursor = 0
+  let lastMatched = -Infinity
+
+  const pair = (onset: ExpectedOnset, index: number) => {
+    used[index] = 1
+    lastMatched = detected[index]!
+    matched.push({
+      ...onset,
+      detectedMs: detected[index]!,
+      dt: detected[index]! - onset.ms,
+      residual: detected[index]! - onset.ms - offsetMs,
+    })
+  }
 
   for (const onset of expected) {
-    while (cursor < detected.length && detected[cursor]! < onset.ms - windowMs) cursor += 1
+    const target = onset.ms + offsetMs
+    while (cursor < detected.length && detected[cursor]! < target - windowMs) cursor += 1
     let bestIndex = -1
     let bestDistance = Infinity
     for (let i = cursor; i < detected.length; i += 1) {
       const time = detected[i]!
-      if (time > onset.ms + windowMs) break
-      if (used[i]) continue
-      const distance = Math.abs(time - onset.ms)
+      if (time > target + windowMs) break
+      if (used[i] || time <= lastMatched) continue
+      const distance = Math.abs(time - target)
       if (distance < bestDistance) {
         bestDistance = distance
         bestIndex = i
       }
     }
-    if (bestIndex < 0) {
-      missed.push({ ...onset, missed: true })
-      continue
-    }
-    used[bestIndex] = 1
-    matched.push({
-      ...onset,
-      detectedMs: detected[bestIndex]!,
-      dt: detected[bestIndex]! - onset.ms,
-    })
+    if (bestIndex >= 0) pair(onset, bestIndex)
   }
+
+  const paired = new Set(matched.map((item) => item.ms))
+  const leftoverExpected = expected.filter((item) => !paired.has(item.ms))
+  const leftoverDetected: number[] = []
+  for (let i = 0; i < detected.length; i += 1) if (!used[i]) leftoverDetected.push(i)
+
+  if (leftoverExpected.length && leftoverDetected.length) {
+    const limit = Math.max(windowMs * 3, 400)
+    let detectedCursor = 0
+    lastMatched = -Infinity
+    for (const onset of leftoverExpected) {
+      let bestIndex = -1
+      let bestDistance = Infinity
+      for (let k = detectedCursor; k < leftoverDetected.length; k += 1) {
+        const index = leftoverDetected[k]!
+        const time = detected[index]!
+        if (time <= lastMatched) continue
+        const distance = Math.abs(time - (onset.ms + offsetMs))
+        if (distance < bestDistance) {
+          bestDistance = distance
+          bestIndex = k
+        }
+      }
+      if (bestIndex < 0 || bestDistance > limit) continue
+      const index = leftoverDetected[bestIndex]!
+      pair(onset, index)
+      detectedCursor = bestIndex + 1
+    }
+    matched.sort((a, b) => a.ms - b.ms)
+  }
+
+  const taken = new Set(matched.map((item) => item.ms))
+  const missed: MissedOnset[] = expected
+    .filter((item) => !taken.has(item.ms))
+    .map((item) => ({ ...item, missed: true as const }))
 
   const extra: number[] = []
   for (let i = 0; i < detected.length; i += 1) if (!used[i]) extra.push(detected[i]!)
 
-  return { matched, missed, extra }
+  return { matched, missed, extra, offsetMs }
+}
+
+/** Runs of onsets whose residual leaves the tolerance. */
+export function tempoRegions(
+  matched: MatchedOnset[],
+  options: { thresholdMs?: number; minRun?: number; padMs?: number } = {},
+): TempoRegion[] {
+  const threshold = options.thresholdMs ?? 120
+  const minRun = options.minRun ?? 2
+  const padMs = options.padMs ?? 60
+  const regions: TempoRegion[] = []
+
+  let run: MatchedOnset[] = []
+  const flush = () => {
+    if (!run.length) return
+    const severe = run.length === 1 && Math.abs(run[0]!.residual) > threshold * 2
+    if (run.length >= minRun || severe) {
+      const residuals = run.map((item) => item.residual)
+      const avgDt = residuals.reduce((sum, value) => sum + value, 0) / residuals.length
+      const worst = residuals.reduce((worst, value) => (Math.abs(value) > Math.abs(worst) ? value : worst), 0)
+      const last = run[run.length - 1]!
+      regions.push({
+        startMs: Math.max(0, run[0]!.ms - padMs),
+        endMs: last.ms + padMs,
+        avgDt: Math.round(avgDt),
+        worstDt: Math.round(worst),
+        count: run.length,
+        fromIndex: run[0]!.index,
+        toIndex: last.index,
+        label: `${worst > 0 ? '+' : ''}${Math.round(worst)} мс`,
+        onsets: run.map((item) => ({ ms: item.ms, detectedMs: item.detectedMs, dt: item.dt })),
+      })
+    }
+    run = []
+  }
+
+  for (const onset of matched) {
+    if (Math.abs(onset.residual) > threshold) run.push(onset)
+    else flush()
+  }
+  flush()
+
+  return regions
 }
 
 /** Bar number and beat for a score position, from the ruler marks. */
@@ -250,59 +388,16 @@ export function barAt(
   return { bar: current.index, beat }
 }
 
-/** Runs of onsets that slip out of the tolerance. */
-export function tempoRegions(
-  matched: MatchedOnset[],
-  options: { thresholdMs?: number; minRun?: number; padMs?: number } = {},
-): TempoRegion[] {
-  const threshold = options.thresholdMs ?? 120
-  const minRun = options.minRun ?? 2
-  const padMs = options.padMs ?? 60
-  const regions: TempoRegion[] = []
-
-  let run: MatchedOnset[] = []
-  const flush = () => {
-    if (!run.length) return
-    const severe = run.length === 1 && Math.abs(run[0]!.dt) > threshold * 2
-    if (run.length >= minRun || severe) {
-      const dts = run.map((item) => item.dt)
-      const avgDt = dts.reduce((sum, value) => sum + value, 0) / dts.length
-      const worst = dts.reduce((worst, value) => (Math.abs(value) > Math.abs(worst) ? value : worst), 0)
-      const last = run[run.length - 1]!
-      regions.push({
-        startMs: Math.max(0, run[0]!.ms - padMs),
-        endMs: last.ms + padMs,
-        avgDt: Math.round(avgDt),
-        worstDt: Math.round(worst),
-        count: run.length,
-        fromIndex: run[0]!.index,
-        toIndex: last.index,
-        label: `${worst > 0 ? '+' : ''}${Math.round(worst)} мс`,
-        onsets: run.map((item) => ({ ms: item.ms, detectedMs: item.detectedMs, dt: item.dt })),
-      })
-    }
-    run = []
-  }
-
-  for (const onset of matched) {
-    if (Math.abs(onset.dt) > threshold) run.push(onset)
-    else flush()
-  }
-  flush()
-
-  return regions
-}
-
-/** Least-squares slope of dt over the onset order + a plain verdict. */
+/** Least-squares slope of the residual over the onset order + a plain verdict. */
 export function tempoTrend(matched: MatchedOnset[]): { slope: number; verdict: TempoSummary['verdict'] } {
   if (matched.length < 4) return { slope: 0, verdict: 'even' }
   const n = matched.length
   const meanX = (n - 1) / 2
-  const meanY = matched.reduce((sum, item) => sum + item.dt, 0) / n
+  const meanY = matched.reduce((sum, item) => sum + item.residual, 0) / n
   let num = 0
   let den = 0
   matched.forEach((item, index) => {
-    num += (index - meanX) * (item.dt - meanY)
+    num += (index - meanX) * (item.residual - meanY)
     den += (index - meanX) * (index - meanX)
   })
   const slope = den ? num / den : 0
@@ -310,23 +405,40 @@ export function tempoTrend(matched: MatchedOnset[]): { slope: number; verdict: T
   return { slope, verdict }
 }
 
-/** Full analysis entry point. `detected` is optional: pass pre-shifted values in tests. */
+/** Median absolute lateness — the shift that straightens the whole take. */
+export function alignmentOffset(matched: MatchedOnset[]): number {
+  if (!matched.length) return 0
+  return Math.round(median(matched.map((item) => item.dt)))
+}
+
+/** Full analysis entry point. `detected` are onsets already in score time. */
 export function analyzeTempo(input: {
   events: TempEvent[]
   tracks: number[]
   /** Detected onsets already converted to score time, ms. */
   detected: number[]
-  options?: { windowMs?: number; thresholdMs?: number; minRun?: number; padMs?: number; clusterMs?: number }
+  options?: {
+    windowMs?: number
+    thresholdMs?: number
+    minRun?: number
+    padMs?: number
+    clusterMs?: number
+  }
 }): TempoSummary {
   const expected = expectedOnsets(input.events, input.tracks, input.options?.clusterMs ?? 30)
-  const { matched, missed, extra } = matchOnsets(expected, input.detected, input.options?.windowMs ?? 250)
+  const { matched, missed, extra, offsetMs } = matchOnsets(
+    expected,
+    input.detected,
+    input.options?.windowMs ?? 80,
+  )
   const regions = tempoRegions(matched, input.options)
-  const inRegion = new Set(regions.flatMap((region) => region.onsets.map((onset) => onset.ms)))
   const threshold = input.options?.thresholdMs ?? 120
-  const errors = matched.filter((onset) => Math.abs(onset.dt) > threshold)
+  const errors = matched.filter((onset) => Math.abs(onset.residual) > threshold)
+  const inRegion = new Set(regions.flatMap((region) => region.onsets.map((onset) => onset.ms)))
   const stray = errors.filter((onset) => !inRegion.has(onset.ms))
-  const absDts = matched.map((item) => Math.abs(item.dt))
+  const absDts = errors.map((onset) => Math.abs(onset.residual))
   const { slope, verdict } = tempoTrend(matched)
+  const hits = matched.filter((onset) => Math.abs(onset.residual) <= threshold).length
 
   return {
     matched,
@@ -335,10 +447,13 @@ export function analyzeTempo(input: {
     regions,
     stray,
     errors,
-    hitRate: expected.length ? matched.length / expected.length : 0,
+    hitRate: matched.length ? hits / matched.length : 0,
     meanAbsDt: absDts.length ? absDts.reduce((sum, value) => sum + value, 0) / absDts.length : 0,
     maxAbsDt: absDts.length ? Math.max(...absDts) : 0,
     driftPerOnset: slope,
     verdict,
+    offsetMs,
+    expectedCount: expected.length,
+    detectedCount: input.detected.length,
   }
 }
