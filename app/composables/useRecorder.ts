@@ -58,6 +58,8 @@ export function createRecorder(options: RecorderOptions) {
   let liveMin: number[] = []
   let liveMax: number[] = []
   let liveFlushed = 0
+  /** Samples that did not fill a whole peak bucket yet — they must not be lost. */
+  let liveCarry: Float32Array<ArrayBufferLike> = new Float32Array(0)
   let liveTimer = 0
   let levelTimer = 0
 
@@ -76,6 +78,7 @@ export function createRecorder(options: RecorderOptions) {
     liveMin = []
     liveMax = []
     liveFlushed = 0
+    liveCarry = new Float32Array(0)
     samples.value = null
     peaks.value = null
     livePeaks.value = null
@@ -165,23 +168,39 @@ export function createRecorder(options: RecorderOptions) {
     capturedSamples += block.length
   }
 
+  /**
+   * Peak buckets are accumulated across flushes instead of per batch: a batch
+   * almost never ends on a bucket boundary, and dropping the remainder every
+   * flush made the live waveform stretch (≈2 % drift, ~150 ms after 8 s) so it
+   * stopped matching both the playhead and the final take.
+   */
   function flushLivePeaks() {
     const ctx = options.getContext()
     if (!ctx) return
+    const hopMs = 5
+    const perBucket = Math.max(1, Math.round((ctx.sampleRate * hopMs) / 1000))
     const fresh = blocks.slice(liveFlushed)
-    if (!fresh.length) return
+    if (!fresh.length && !liveCarry.length) return
     liveFlushed = blocks.length
-    const batch = concatBlocks(fresh)
-    const batchPeaks = computePeaks(batch, ctx.sampleRate, 5)
-    for (let i = 0; i < batchPeaks.min.length; i += 1) {
-      liveMin.push(batchPeaks.min[i]!)
-      liveMax.push(batchPeaks.max[i]!)
+
+    const merged = concatBlocks(liveCarry.length ? [liveCarry, ...fresh] : fresh)
+    const usable = Math.floor(merged.length / perBucket) * perBucket
+    if (usable > 0) {
+      const part = computePeaks(merged.subarray(0, usable), ctx.sampleRate, hopMs)
+      for (let i = 0; i < part.min.length; i += 1) {
+        liveMin.push(part.min[i]!)
+        liveMax.push(part.max[i]!)
+      }
+      liveCarry = merged.slice(usable)
+    } else {
+      liveCarry = merged
     }
+
     livePeaks.value = {
-      hopMs: 5,
+      hopMs,
       min: Float32Array.from(liveMin),
       max: Float32Array.from(liveMax),
-      durationMs: (liveMin.length * 5),
+      durationMs: liveMin.length * hopMs,
     }
     durationMs.value = (capturedSamples / ctx.sampleRate) * 1000
   }

@@ -39,6 +39,16 @@ function check(name: string, condition: boolean, detail = '') {
 }
 
 {
+  // пик должен попадать в свой бакет: импульс на 1000 мс при hop 5 мс — бакет 200
+  const samples = new Float32Array(48000 * 2)
+  samples[48000] = 0.9
+  const peaks = computePeaks(samples, 48000, 5)
+  let loudest = 0
+  for (let i = 1; i < peaks.max.length; i += 1) if (peaks.max[i]! > peaks.max[loudest]!) loudest = i
+  check('computePeaks: импульс в правильном бакете', loudest === 200, `${loudest}`)
+}
+
+{
   const samples = new Float32Array(48000)
   for (let i = 0; i < samples.length; i += 1) samples[i] = Math.sin((i / 48000) * 2 * Math.PI * 440) * 0.5
   const peaks = computePeaks(samples, 48000, 5)
