@@ -4,6 +4,7 @@ import { createRecorder } from '~/composables/useRecorder'
 import { encodeWav } from '~/composables/useWaveform'
 import {
   analyzeTempo,
+  barAt,
   detectOnsets,
   type TempoRegion,
   type TempoSummary,
@@ -89,6 +90,16 @@ const levelTone = computed(() => {
 
 const positionLabel = computed(() => formatTime(playheadMs.value))
 const durationLabel = computed(() => formatTime(Math.max(scoreDuration.value, playheadMs.value)))
+
+/** 1 нота / 2 ноты / 5 нот — readable counts instead of "3 нот". */
+function plural(count: number, forms: [string, string, string]) {
+  const abs = Math.abs(count) % 100
+  const last = abs % 10
+  if (abs > 10 && abs < 20) return forms[2]
+  if (last === 1) return forms[0]
+  if (last >= 2 && last <= 4) return forms[1]
+  return forms[2]
+}
 
 function formatTime(ms: number) {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -361,6 +372,22 @@ function analyze() {
   analysisDone.value = true
 }
 
+type RegionRow = TempoRegion & { place: string; direction: string }
+
+/** «такт 6, доля 2 — позже на 223 мс, 6 нот» — human readable region. */
+const regionRows = computed<RegionRow[]>(() => {
+  const bars = barMarks.value
+  return (summary.value?.regions ?? []).map((region) => {
+    const place = barAt(region.startMs, bars)
+    const worst = region.worstDt
+    return {
+      ...region,
+      place: place ? `такт ${place.bar}, доля ${place.beat}` : formatTime(region.startMs),
+      direction: worst > 0 ? `позже на ${Math.abs(Math.round(worst))} мс` : `раньше на ${Math.abs(Math.round(worst))} мс`,
+    }
+  })
+})
+
 function focusRegion(region: TempoRegion) {
   seek(region.startMs)
   if (!playing.value) togglePlayback()
@@ -561,6 +588,7 @@ onBeforeUnmount(() => {
           :record-start-ms="recorder.recordStartMs.value"
           :shift-ms="shiftMs"
           :regions="regions"
+          :stray="summary?.stray ?? []"
           :playhead-ms="playheadMs"
           :follow="follow"
           @seek="seek"
@@ -601,7 +629,15 @@ onBeforeUnmount(() => {
             </div>
             <div class="metric">
               <span class="metric-value">{{ summary.regions.length }}</span>
-              <span class="metric-label">участков вне темпа</span>
+              <span class="metric-label">
+                {{ plural(summary.regions.length, ['участок', 'участка', 'участков']) }} вне темпа
+              </span>
+            </div>
+            <div class="metric">
+              <span class="metric-value">{{ summary.stray.length }}</span>
+              <span class="metric-label">
+                {{ plural(summary.stray.length, ['одиночный промах', 'одиночных промаха', 'одиночных промахов']) }}
+              </span>
             </div>
             <div class="metric">
               <span class="metric-value">{{ summary.missed.length }}</span>
@@ -610,20 +646,24 @@ onBeforeUnmount(() => {
           </div>
 
           <p class="analysis-legend">
-            Пунктир — где нота должна быть по партитуре, красная линия — где она сыграна,
-            полоса — участок вне темпа.
+            Пунктир — место ноты по партитуре, сплошная линия — где она сыграна, красная полоса —
+            участок, где игра вышла из допуска {{ toleranceMs }} мс на две ноты и больше.
+            Бледный пунктир — одиночные промахи.
           </p>
 
-          <p v-if="!summary.regions.length" class="analysis-empty">
-            Отклонений больше {{ toleranceMs }} мс подряд не найдено — темп держится.
+          <p v-if="!summary.regions.length && !summary.stray.length" class="analysis-empty">
+            Отклонений больше {{ toleranceMs }} мс не найдено — темп держится.
           </p>
 
           <ul v-else class="regions">
-            <li v-for="(region, index) in summary.regions" :key="index">
+            <li v-for="(region, index) in regionRows" :key="index">
               <button type="button" class="region" @click="focusRegion(region)">
                 <span class="region-time">{{ formatTime(region.startMs) }}</span>
-                <span class="region-label">{{ region.label }}</span>
-                <span class="region-count">{{ region.count }} нот</span>
+                <span class="region-place">{{ region.place }}</span>
+                <span class="region-label">{{ region.direction }}</span>
+                <span class="region-count">
+                  {{ region.count }} {{ plural(region.count, ['нота', 'ноты', 'нот']) }}
+                </span>
               </button>
             </li>
           </ul>
@@ -1013,6 +1053,10 @@ onBeforeUnmount(() => {
 .region-time {
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
+}
+
+.region-place {
+  color: var(--foreground);
 }
 
 .region-label {

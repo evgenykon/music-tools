@@ -19,6 +19,7 @@ const props = defineProps<{
   recordStartMs: number
   shiftMs: number
   regions: TempoRegion[]
+  stray: { ms: number; detectedMs: number; dt: number }[]
   playheadMs: number
   follow: boolean
 }>()
@@ -107,7 +108,9 @@ function drawLane(
     if (event.track !== track.index) continue
     if (event.start + event.dur < timeFrom || event.start > timeTo) continue
     const x = xs(event.start)
-    const width = Math.max(2, event.dur * props.pxPerMs)
+    // Drum hits are points in time, not sustained notes: a fixed tick per hit
+    // reads as a rhythm instead of a solid line at slow zoom.
+    const width = event.drum ? 3 : Math.max(2, event.dur * props.pxPerMs)
     let y: number
     let height: number
     if (event.drum) {
@@ -286,6 +289,23 @@ function draw() {
     }
   }
 
+  // single slips that never group into a region: pale dashed marker only
+  for (const onset of props.stray) {
+    const expectedX = Math.round(xs(onset.ms)) + 0.5
+    const playedX = Math.round(xs(onset.detectedMs)) + 0.5
+    if (expectedX < -4 || expectedX > width + 4) continue
+    ctx.save()
+    ctx.setLineDash([3, 5])
+    ctx.strokeStyle = 'rgba(248, 113, 113, 0.5)'
+    ctx.beginPath()
+    ctx.moveTo(expectedX, RULER_H)
+    ctx.lineTo(expectedX, height - 4)
+    ctx.stroke()
+    ctx.restore()
+    ctx.fillStyle = 'rgba(248, 113, 113, 0.65)'
+    ctx.fillRect(playedX - 1, height - 12, 3, 8)
+  }
+
   // playhead
   const headX = xs(props.playheadMs)
   if (headX >= -2 && headX <= width + 2) {
@@ -352,7 +372,7 @@ watch(
 )
 
 watch(
-  () => [props.pxPerMs, props.peaks, props.regions, props.tracks, props.shiftMs, props.bars],
+  () => [props.pxPerMs, props.peaks, props.regions, props.stray, props.tracks, props.shiftMs, props.bars],
   () => scheduleDraw(),
   { deep: true },
 )

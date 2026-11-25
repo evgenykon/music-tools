@@ -57,6 +57,8 @@ export interface TempoSummary {
   /** Recorded onsets that matched nothing in the score. */
   extra: number[]
   regions: TempoRegion[]
+  /** Notes outside the tolerance that did not become a whole region. */
+  stray: MatchedOnset[]
   hitRate: number
   meanAbsDt: number
   maxAbsDt: number
@@ -221,6 +223,31 @@ export function matchOnsets(
   return { matched, missed, extra }
 }
 
+/** Bar number and beat for a score position, from the ruler marks. */
+export function barAt(
+  ms: number,
+  bars: { ms: number; index: number; numerator?: number }[],
+): { bar: number; beat: number } | null {
+  if (!bars.length) return null
+  let found = -1
+  for (let i = 0; i < bars.length; i += 1) {
+    if (bars[i]!.ms <= ms) found = i
+    else break
+  }
+  if (found < 0) return { bar: bars[0]!.index, beat: 1 }
+  const current = bars[found]!
+  const next = bars[found + 1]
+  const numerator = current.numerator || 4
+  // The last bar has no successor: its length comes from the previous bar.
+  const span = next
+    ? next.ms - current.ms
+    : found > 0
+      ? current.ms - bars[found - 1]!.ms
+      : 0
+  const beat = span > 0 ? Math.min(numerator, Math.floor(((ms - current.ms) / span) * numerator) + 1) : 1
+  return { bar: current.index, beat }
+}
+
 /** Runs of onsets that slip out of the tolerance. */
 export function tempoRegions(
   matched: MatchedOnset[],
@@ -292,6 +319,9 @@ export function analyzeTempo(input: {
   const expected = expectedOnsets(input.events, input.tracks, input.options?.clusterMs ?? 30)
   const { matched, missed, extra } = matchOnsets(expected, input.detected, input.options?.windowMs ?? 250)
   const regions = tempoRegions(matched, input.options)
+  const inRegion = new Set(regions.flatMap((region) => region.onsets.map((onset) => onset.ms)))
+  const threshold = input.options?.thresholdMs ?? 120
+  const stray = matched.filter((onset) => Math.abs(onset.dt) > threshold && !inRegion.has(onset.ms))
   const absDts = matched.map((item) => Math.abs(item.dt))
   const { slope, verdict } = tempoTrend(matched)
 
@@ -300,6 +330,7 @@ export function analyzeTempo(input: {
     missed,
     extra,
     regions,
+    stray,
     hitRate: expected.length ? matched.length / expected.length : 0,
     meanAbsDt: absDts.length ? absDts.reduce((sum, value) => sum + value, 0) / absDts.length : 0,
     maxAbsDt: absDts.length ? Math.max(...absDts) : 0,

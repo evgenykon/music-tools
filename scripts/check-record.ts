@@ -7,6 +7,7 @@
 import { concatBlocks, computePeaks, encodeWav, peakAmplitude } from '../app/composables/useWaveform.ts'
 import {
   analyzeTempo,
+  barAt,
   clusterOnsets,
   detectOnsets,
   expectedOnsets,
@@ -184,6 +185,20 @@ function clicks(timesMs: number[], sampleRate = 48000) {
   check('tempoTrend: спешка', rushing.verdict === 'rushing', `${rushing.slope.toFixed(1)}`)
 }
 
+// ---- ruler lookup -----------------------------------------------------------
+
+{
+  const bars = [
+    { ms: 0, index: 1, numerator: 4 },
+    { ms: 2000, index: 2, numerator: 4 },
+    { ms: 4000, index: 3, numerator: 4 },
+  ]
+  check('barAt: начало такта', JSON.stringify(barAt(0, bars)) === '{"bar":1,"beat":1}')
+  check('barAt: середина такта', JSON.stringify(barAt(3000, bars)) === '{"bar":2,"beat":3}', JSON.stringify(barAt(3000, bars)))
+  check('barAt: конец', JSON.stringify(barAt(5200, bars)) === '{"bar":3,"beat":3}', JSON.stringify(barAt(5200, bars)))
+  check('barAt: без линеек = null', barAt(100, []) === null)
+}
+
 // ---- end to end -------------------------------------------------------------
 
 {
@@ -202,6 +217,7 @@ function clicks(timesMs: number[], sampleRate = 48000) {
   check('analyzeTempo: попадания', Math.round(summary.hitRate * 100) === 100, `${summary.hitRate}`)
   check('analyzeTempo: средняя ошибка', Math.round(summary.meanAbsDt) === 70, `${summary.meanAbsDt.toFixed(1)}`)
   check('analyzeTempo: регион', summary.regions.length === 1 && summary.regions[0]!.count === 2, `${summary.regions.length}`)
+  check('analyzeTempo: одиночные промахи отделены от регионов', summary.stray.length === 0, `${summary.stray.length}`)
 }
 
 if (failures) {

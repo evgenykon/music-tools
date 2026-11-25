@@ -244,6 +244,10 @@ export function createRecorder(options: RecorderOptions) {
     countInMs = beats * beatMs
     const lead = 0.25
     zeroCtx = ctx.currentTime + lead + countInMs / 1000
+    // The take starts capturing right away, so the count-in already belongs to
+    // the buffer. Knowing the offset here (not only after stop) keeps the live
+    // waveform under the score instead of shifting it ahead of the playhead.
+    recordStartMs.value = (zeroCtx - ctx.currentTime) * 1000
     status.value = 'countIn'
     for (let beat = 0; beat < beats; beat += 1) {
       click(zeroCtx - ((beats - beat) * beatMs) / 1000, beat === 0)
