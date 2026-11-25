@@ -8,6 +8,7 @@ const tabs = [
   { to: '/tree', label: 'Дерево аккордов' },
   { to: '/notebook', label: 'Блокнот' },
   { to: '/player', label: 'GTP player' },
+  { to: '/record', label: 'Проверка' },
 ]
 
 /** Exact match: "/" must not stay active on subpages. */
