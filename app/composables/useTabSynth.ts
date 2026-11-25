@@ -109,6 +109,7 @@ export function createTabSynth(options: { base?: string } = {}) {
   let segments: Segment[] = []
   let beatTicks: { tick: number; ms: number }[] = []
   let barTicks = new Set<number>()
+  let barMarks: { tick: number; ms: number; index: number; numerator: number; denominator: number }[] = []
   let active: { src: AudioScheduledSourceNode; gain: GainNode }[] = []
 
   const tracks = ref<TrackState[]>([])
@@ -200,7 +201,7 @@ export function createTabSynth(options: { base?: string } = {}) {
   function buildSegments(score: any) {
     const tempos = resolveTempos(score)
     const tempoByTick = new Map<number, number>()
-    const barStarts = new Set<number>()
+    const barInfo = new Map<number, { numerator: number; denominator: number }>()
     let maxTick = 0
 
     for (const track of score.tracks) {
@@ -216,7 +217,12 @@ export function createTabSynth(options: { base?: string } = {}) {
               maxTick = Math.max(maxTick, tick + (beat.playbackDuration || 0))
             }
           }
-          if (barStart >= 0) barStarts.add(barStart)
+          if (barStart >= 0 && !barInfo.has(barStart)) {
+            barInfo.set(barStart, {
+              numerator: bar.masterBar?.timeSignatureNumerator || 4,
+              denominator: bar.masterBar?.timeSignatureDenominator || 4,
+            })
+          }
         }
       }
     }
@@ -236,8 +242,18 @@ export function createTabSynth(options: { base?: string } = {}) {
     duration.value = ms
     loopStart.value = 0
     loopEnd.value = ms
-    // Metronome accents: ticks where a bar begins (repeat instances included).
-    barTicks = barStarts
+    // Metronome accents + ruler marks: ticks where a bar begins (repeat instances
+    // included, so the playback order defines the bar numbers).
+    barTicks = new Set(barInfo.keys())
+    barMarks = [...barInfo.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([tick, info], playbackIndex) => ({
+        tick,
+        ms: msForTick(tick),
+        index: playbackIndex + 1,
+        numerator: info.numerator,
+        denominator: info.denominator,
+      }))
   }
 
   function msForTick(tick: number) {
@@ -666,11 +682,15 @@ export function createTabSynth(options: { base?: string } = {}) {
     }
   }
 
-  function startScheduling(from: number) {
-    if (!ctx) return
+  function startScheduling(from: number, atContextTime?: number) {
+    if (!ctx) return 0
     stopVoices()
     startedFrom = from
-    startedAtCtx = ctx.currentTime + 0.12
+    // A caller (e.g. the recording page) may pass a shared "zero" so playback and
+    // a recorded AudioBufferSourceNode start on the same sample.
+    startedAtCtx = atContextTime && atContextTime > ctx.currentTime
+      ? atContextTime
+      : ctx.currentTime + 0.12
 
     nextEvent = events.findIndex((event) => event.start + event.dur > from)
     if (nextEvent < 0) nextEvent = events.length
@@ -751,13 +771,23 @@ export function createTabSynth(options: { base?: string } = {}) {
     pump()
   }
 
-  async function play() {
+  /** Create/resume the output context without starting playback. */
+  async function ensureAudio() {
     const context = ensureContext()
     if (context.state === 'suspended') await context.resume()
-    if (position.value >= duration.value - 1) position.value = 0
-    startScheduling(position.value)
+    return context
+  }
+
+  async function play(fromMs?: number, atContextTime?: number) {
+    const context = ensureContext()
+    if (context.state === 'suspended') await context.resume()
+    let from = fromMs == null ? position.value : Math.min(Math.max(0, fromMs), duration.value)
+    if (from >= duration.value - 1) from = 0
+    position.value = from
+    const startedAt = startScheduling(from, atContextTime)
     playing.value = true
     startTicking()
+    return startedAt
   }
 
   function pause() {
@@ -828,6 +858,20 @@ export function createTabSynth(options: { base?: string } = {}) {
     applyTrackSettings,
     destroy,
     trackAt,
+    ensureAudio,
+    /** Read-only view of the score timeline for drawing (record page, tests). */
+    get timeline() {
+      return {
+        duration: duration.value,
+        beats: beatTicks,
+        bars: barMarks,
+        events,
+        /** Score time of the first beat, ms. */
+        startMs: 0,
+        /** Tempo of the first bar — used for the count-in. */
+        firstTempo: segments.length ? segments[0]!.tempo : 120,
+      }
+    },
     /** Diagnostics: how many samples are decoded for each set. */
     get diagnostics() {
       return {

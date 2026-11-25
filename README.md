@@ -28,13 +28,22 @@ An interactive circle of fifths — a tool for exploring harmony, building chord
   tab editor (up to 8 notes). Multiple pages, autosave to localStorage, JSON export/import and printing
   ([`/notebook`](https://evgenykon.github.io/music-tools/notebook))
 
+- **Practice check:** open a GTP/MusicXML file, record yourself playing along — 4 count-in clicks,
+  then the score and the microphone start together. The take is drawn under the note lanes on one
+  shared horizontal timeline (one lane per track, tracks can be hidden or muted) and grows live while
+  recording; every take is played back sample-locked with the score, alone or together with it, from
+  any point, and exported as WAV. «Анализ темпа» compares the take with the notes of a chosen track
+  and marks slips in red: a dashed line where the note belongs, a solid line where it was actually
+  played, and a band over the whole out-of-tempo stretch, plus hit rate, mean/worst deviation and
+  drift ([`/record`](https://evgenykon.github.io/music-tools/record))
+
 ## Getting started
 
 ```bash
 make build    # build Docker image
 make dev      # start dev server at http://localhost:3000
 make down     # stop the server
-make test     # run chord-detection checks inside the container
+make test     # run chord/tree/notebook/record checks inside the container
 ```
 
 ## Stack
